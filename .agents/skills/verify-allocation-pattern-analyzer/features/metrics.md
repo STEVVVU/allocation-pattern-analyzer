@@ -1,5 +1,7 @@
 # Offline kernel and fixture metrics
 
+[Hosted run 39729506523](https://github.com/STEVVVU/allocation-pattern-analyzer/actions/runs/39729506523) completed both five-scan cells. The root README and `docs/evidence/metrics-39729506523/measurement.json` retain exact samples, 18 strategy cells, all fixture negatives/unknowns, config/image/source hashes and cleanup. The two different images/runners are not an interleaved performance baseline; no kernel truth labels or kernel precision/recall are available.
+
 Run `python -I .agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py --run-id <fresh-id> --kernel-binary <trusted-vmlinux>` on Ubuntu. `--smoke` permits the tiny owned fixture instead and cannot support kernel performance claims.
 
 The manual metrics workflow has isolated Linux 6.1 and Linux 6.6 runners. The maintained kernel builder accepts only those two official versions with fixed archive SHA-256 from [kernel.org](https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc). Each uses x86-64 tinyconfig with KALLSYMS and KALLSYMS_ALL. Preserve exact `.config`, source provenance, ELF hash, compiler environment and all raw reports. No kernel is booted, installed or probed.
