@@ -1,0 +1,397 @@
+{
+  "checks": [
+    {
+      "entry": "entry_direct",
+      "native": {
+        "all_passed": true,
+        "representatives": [
+          {
+            "allocator": "slab_alloc",
+            "arguments": {
+              "value": 7
+            },
+            "counters": {
+              "mapping": 0,
+              "slab": 1
+            },
+            "entry": "entry_direct",
+            "oracle": {
+              "mapping": 0,
+              "slab": 1
+            },
+            "result": "passed"
+          }
+        ],
+        "validated_witnesses": 1
+      },
+      "status": "witnessed",
+      "unknown": []
+    },
+    {
+      "entry": "entry_wrapper",
+      "native": {
+        "all_passed": true,
+        "representatives": [
+          {
+            "allocator": "mapping_alloc",
+            "arguments": {
+              "value": 8230
+            },
+            "counters": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "entry": "entry_wrapper",
+            "oracle": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "result": "passed"
+          }
+        ],
+        "validated_witnesses": 1
+      },
+      "status": "witnessed",
+      "unknown": []
+    },
+    {
+      "entry": "entry_multi_route",
+      "native": {
+        "all_passed": true,
+        "representatives": [
+          {
+            "allocator": "mapping_alloc",
+            "arguments": {
+              "value": 3237998097
+            },
+            "counters": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "entry": "entry_multi_route",
+            "oracle": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "result": "passed"
+          }
+        ],
+        "validated_witnesses": 1
+      },
+      "status": "witnessed",
+      "unknown": []
+    },
+    {
+      "entry": "entry_correlated",
+      "native": {
+        "all_passed": true,
+        "representatives": [
+          {
+            "allocator": "mapping_alloc",
+            "arguments": {
+              "left": 7,
+              "right": 11
+            },
+            "counters": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "entry": "entry_correlated",
+            "oracle": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "result": "passed"
+          },
+          {
+            "allocator": "mapping_alloc",
+            "arguments": {
+              "left": 13,
+              "right": 17
+            },
+            "counters": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "entry": "entry_correlated",
+            "oracle": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "result": "passed"
+          }
+        ],
+        "validated_witnesses": 2
+      },
+      "status": "witnessed",
+      "unknown": []
+    },
+    {
+      "entry": "entry_conditional",
+      "native": {
+        "all_passed": true,
+        "representatives": [
+          {
+            "allocator": "mapping_alloc",
+            "arguments": {
+              "value": 3237998097
+            },
+            "counters": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "entry": "entry_conditional",
+            "oracle": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "result": "passed"
+          },
+          {
+            "allocator": "mapping_alloc",
+            "arguments": {
+              "value": 3237998097
+            },
+            "counters": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "entry": "entry_conditional",
+            "oracle": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "result": "passed"
+          }
+        ],
+        "validated_witnesses": 2
+      }
+    },
+    {
+      "entry": "entry_loop",
+      "native": {
+        "all_passed": true,
+        "representatives": [
+          {
+            "allocator": "slab_alloc",
+            "arguments": {
+              "value": 8
+            },
+            "counters": {
+              "mapping": 0,
+              "slab": 1
+            },
+            "entry": "entry_loop",
+            "oracle": {
+              "mapping": 0,
+              "slab": 1
+            },
+            "result": "passed"
+          },
+          {
+            "allocator": "slab_alloc",
+            "arguments": {
+              "value": 8
+            },
+            "counters": {
+              "mapping": 0,
+              "slab": 1
+            },
+            "entry": "entry_loop",
+            "oracle": {
+              "mapping": 0,
+              "slab": 1
+            },
+            "result": "passed"
+          }
+        ],
+        "validated_witnesses": 18
+      }
+    },
+    {
+      "entry": "entry_indirect",
+      "native": {
+        "all_passed": true,
+        "representatives": [
+          {
+            "allocator": "mapping_alloc",
+            "arguments": {
+              "value": 0
+            },
+            "counters": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "entry": "entry_indirect",
+            "oracle": {
+              "mapping": 1,
+              "slab": 0
+            },
+            "result": "passed"
+          },
+          {
+            "allocator": "slab_alloc",
+            "arguments": {
+              "value": 1
+            },
+            "counters": {
+              "mapping": 0,
+              "slab": 1
+            },
+            "entry": "entry_indirect",
+            "oracle": {
+              "mapping": 0,
+              "slab": 1
+            },
+            "result": "passed"
+          }
+        ],
+        "validated_witnesses": 206
+      }
+    },
+    {
+      "entry": "entry_loop_budget",
+      "native": {
+        "counters": {
+          "mapping": 0,
+          "slab": 1
+        },
+        "oracle": {
+          "mapping": 0,
+          "slab": 1
+        },
+        "result": "passed"
+      },
+      "status": "incomplete",
+      "unknown": [
+        "step_limit"
+      ]
+    },
+    {
+      "entry": "entry_infeasible",
+      "native": {
+        "argument": 305419896,
+        "counters": {
+          "mapping": 0,
+          "slab": 0
+        },
+        "entry": "infeasible",
+        "oracle": {
+          "mapping": 0,
+          "slab": 0
+        },
+        "result": "passed"
+      },
+      "status": "no_witness_observed",
+      "unknown": []
+    },
+    {
+      "entry": "entry_unsupported",
+      "native": "intentionally_not_executed",
+      "status": "incomplete",
+      "unknown": [
+        "unconstrained_successor"
+      ]
+    }
+  ],
+  "cleanup_completed": true,
+  "comparison": {
+    "bounded_symbolic": {
+      "solver_calls": 1,
+      "steps": 3,
+      "unique_blocks": 3,
+      "unknown": [],
+      "witnesses": 1
+    },
+    "seed_first": {
+      "solver_calls": 1,
+      "steps": 7,
+      "unique_blocks": 3,
+      "unknown": [],
+      "witnesses": 1
+    },
+    "seeded_random": {
+      "solver_calls": 0,
+      "steps": 512,
+      "unique_blocks": 2,
+      "unknown": [
+        "step_limit"
+      ],
+      "witnesses": 0
+    }
+  },
+  "events": [
+    {
+      "action": "launch",
+      "binary_bytes": 10400,
+      "native_runner": true,
+      "result": "ready"
+    },
+    {
+      "action": "doctor",
+      "angr": "9.2.207",
+      "elf_bytes": 10400,
+      "module": "/opt/hostedtoolcache/Python/3.11.9/x64/lib/python3.11/site-packages/angr/__init__.py",
+      "python": "3.11.9",
+      "result": "ready"
+    },
+    {
+      "action": "drive",
+      "checks": 10,
+      "comparison": {
+        "bounded_symbolic": {
+          "solver_calls": 1,
+          "steps": 3,
+          "unique_blocks": 3,
+          "unknown": [],
+          "witnesses": 1
+        },
+        "seed_first": {
+          "solver_calls": 1,
+          "steps": 7,
+          "unique_blocks": 3,
+          "unknown": [],
+          "witnesses": 1
+        },
+        "seeded_random": {
+          "solver_calls": 0,
+          "steps": 512,
+          "unique_blocks": 2,
+          "unknown": [
+            "step_limit"
+          ],
+          "witnesses": 0
+        }
+      },
+      "native_witnesses": 231,
+      "result": "passed"
+    },
+    {
+      "action": "evidence",
+      "checks": 10,
+      "result": "passed",
+      "transcript": "transcript.txt"
+    },
+    {
+      "action": "failure",
+      "result": "recorded"
+    },
+    {
+      "action": "cleanup",
+      "evidence_preserved": true,
+      "removed": [
+        "allocation_paths",
+        "allocation_paths_native"
+      ],
+      "result": "passed"
+    }
+  ],
+  "failure": {
+    "detail": "injected failure after the native journey",
+    "type": "VerificationError"
+  },
+  "raw_evidence_sha256": "ae0e9af9741ecc8beee8ea62e389d1e536fd41148d4978b6df4bbb6145e403c9",
+  "run_id": "ci-failure-39721132277",
+  "source_sha": "5beed4ee038742a2df12383fb8b41ad3b7ba28a1",
+  "workflow_url": "https://github.com/STEVVVU/allocation-pattern-analyzer/actions/runs/39721132277"
+}

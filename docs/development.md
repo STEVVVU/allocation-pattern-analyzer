@@ -30,7 +30,7 @@ python -I .agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py --
 
 The driver compiles a minimal ELF fixture; checks Python, installed angr, and architecture; analyzes direct, wrapper, competing-route, correlated two-input, conditional, bounded-loop, known-indirect, infeasible, and unsupported paths; compares exploration strategies; and, on Linux, checks every reported witness against exact native counters and an independent per-case oracle. It also checks a one-step loop run reports `step_limit` and the infeasible case has zero allocation counters. Cleanup removes only run-owned scratch executables. JSON, transcript, actions, native outcomes, and cleanup status remain in `.agents/runs/<run-id>/`. Use `--inject-failure` to verify evidence retention and failure cleanup. On Windows, Linux ELF analysis is available, but native validation is marked not run; the read-only Ubuntu workflow provides that proof.
 
-The two maintained config tests can also run independently:
+The five maintained config tests can also run independently:
 
 ```sh
 python -I tests/test_config.py
