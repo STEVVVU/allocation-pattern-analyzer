@@ -1,0 +1,10 @@
+source_url=https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.tar.xz
+source_version=6.6
+source_tar_sha256=d926a06c63dd8ac7df3f86ee1ffc2ce2a3b81a2d168484e76b5b389aba8e56d0
+kernel_release=6.6.0
+f8ecea619d66bb04ea0284c40c2d02592f68edd894999ee507ba039a2efe9e15  /home/runner/work/_temp/linux-kernel/linux-6.6/.config
+478933267cd102c219ba9394e2aec5954f0d8174f170f38d88eddf1528b29e4c  /home/runner/work/_temp/linux-kernel/linux-6.6/vmlinux
+CONFIG_KALLSYMS=y
+CONFIG_KALLSYMS_ALL=y
+CONFIG_64BIT=y
+CONFIG_X86_64=y

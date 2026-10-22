@@ -23,3 +23,5 @@ Run the `Drive` phase. Inspect the JSON and confirm that each witnessed input re
 Only ELF x86-64 inputs and declared integer inputs are supported. Timeout, unsupported calls, unresolved indirect calls, and symbolic-address ambiguity remain unresolved; they do not prove that a path is absent. Loop exploration is bounded, and a reported step limit is an unknown outcome rather than a negative result.
 
 Kernel callgraph entries are syntactic candidates, not feasibility results. The optional symbolic mode uses a placeholder input and does not model `pt_regs`, kernel boot state, user memory, or kernel-specific SimProcedures. Its results are exploratory and cannot be presented as real syscall witnesses.
+
+Observed native kernel proof: run 39722622608 built Linux 6.6 and scanned all 440 discovered entries with 231 syntactic candidate paths. Config, source provenance, scan JSON and terminal summaries are retained in docs/evidence/linux-kernel-39722622608/. This is not a modeled kernel-state reachability or security proof.

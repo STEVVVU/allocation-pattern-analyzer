@@ -1,0 +1,200 @@
+{
+  "interpretation": "Callgraph paths are syntactic candidates only. No path found is not evidence of unreachability. Kernel boot state, syscall register frames, external state, and allocator side effects are not modeled.",
+  "kernel_scan": {
+    "allocation_symbols_found": {
+      "__kmalloc": "slab",
+      "kmem_cache_alloc": "slab",
+      "krealloc": "slab",
+      "vmalloc": "mapping",
+      "vmalloc_node": "mapping",
+      "vmalloc_user": "mapping",
+      "vmap": "mapping",
+      "vzalloc": "mapping"
+    },
+    "analysis_kind": "syntactic callgraph candidates only",
+    "artifact": ".agents/runs/ci-39722622608/kernel-scan.json",
+    "binary_bytes": 9635384,
+    "bounded_symbolic_status": "not_run",
+    "candidate_paths": 231,
+    "external_process_limits": {
+      "address_space_mb": 8192,
+      "timeout_seconds": 900
+    },
+    "sha256": "478933267cd102c219ba9394e2aec5954f0d8174f170f38d88eddf1528b29e4c",
+    "source_provenance": {
+      "config": "linux-6.6.config",
+      "config_sha256": "f8ecea619d66bb04ea0284c40c2d02592f68edd894999ee507ba039a2efe9e15",
+      "source_manifest": "kernel-source-provenance.txt"
+    },
+    "syscall_entries_discovered": 440,
+    "syscall_entries_scanned": 440
+  },
+  "native_fixture_cases": [
+    {
+      "entry": "entry_direct",
+      "native_validations": 1
+    },
+    {
+      "entry": "entry_wrapper",
+      "native_validations": 1
+    },
+    {
+      "entry": "entry_multi_route",
+      "native_validations": 1
+    },
+    {
+      "entry": "entry_correlated",
+      "native_validations": 2
+    },
+    {
+      "entry": "entry_conditional",
+      "native_validations": 2
+    },
+    {
+      "entry": "entry_loop",
+      "native_validations": 18
+    },
+    {
+      "entry": "entry_indirect",
+      "native_validations": 206
+    }
+  ],
+  "negative_cleanup_completed": true,
+  "negative_events": [
+    {
+      "action": "launch",
+      "binary_bytes": 10632,
+      "native_runner": true,
+      "result": "ready"
+    },
+    {
+      "action": "doctor",
+      "angr": "9.2.207",
+      "elf_bytes": 10632,
+      "module": "/opt/hostedtoolcache/Python/3.11.9/x64/lib/python3.11/site-packages/angr/__init__.py",
+      "python": "3.11.9",
+      "result": "ready"
+    },
+    {
+      "action": "drive",
+      "checks": 10,
+      "comparison": {
+        "bounded_symbolic": {
+          "solver_calls": 1,
+          "steps": 3,
+          "unique_blocks": 3,
+          "unknown": [],
+          "witnesses": 1
+        },
+        "seed_first": {
+          "solver_calls": 1,
+          "steps": 7,
+          "unique_blocks": 3,
+          "unknown": [],
+          "witnesses": 1
+        },
+        "seeded_random": {
+          "solver_calls": 0,
+          "steps": 512,
+          "unique_blocks": 2,
+          "unknown": [
+            "step_limit"
+          ],
+          "witnesses": 0
+        }
+      },
+      "native_witnesses": 231,
+      "result": "passed"
+    },
+    {
+      "action": "evidence",
+      "checks": 10,
+      "result": "passed",
+      "transcript": "transcript.txt"
+    },
+    {
+      "action": "failure",
+      "result": "recorded"
+    },
+    {
+      "action": "cleanup",
+      "evidence_preserved": true,
+      "removed": [
+        "allocation_paths",
+        "allocation_paths_native"
+      ],
+      "result": "passed"
+    }
+  ],
+  "negative_failure": {
+    "detail": "injected failure after the native journey",
+    "type": "VerificationError"
+  },
+  "normal_cleanup_completed": true,
+  "normal_events": [
+    {
+      "action": "launch",
+      "binary_bytes": 10632,
+      "native_runner": true,
+      "result": "ready"
+    },
+    {
+      "action": "doctor",
+      "angr": "9.2.207",
+      "elf_bytes": 10632,
+      "module": "/opt/hostedtoolcache/Python/3.11.9/x64/lib/python3.11/site-packages/angr/__init__.py",
+      "python": "3.11.9",
+      "result": "ready"
+    },
+    {
+      "action": "drive",
+      "checks": 10,
+      "comparison": {
+        "bounded_symbolic": {
+          "solver_calls": 1,
+          "steps": 3,
+          "unique_blocks": 3,
+          "unknown": [],
+          "witnesses": 1
+        },
+        "seed_first": {
+          "solver_calls": 1,
+          "steps": 7,
+          "unique_blocks": 3,
+          "unknown": [],
+          "witnesses": 1
+        },
+        "seeded_random": {
+          "solver_calls": 0,
+          "steps": 512,
+          "unique_blocks": 2,
+          "unknown": [
+            "step_limit"
+          ],
+          "witnesses": 0
+        }
+      },
+      "native_witnesses": 231,
+      "result": "passed"
+    },
+    {
+      "action": "evidence",
+      "checks": 10,
+      "result": "passed",
+      "transcript": "transcript.txt"
+    },
+    {
+      "action": "cleanup",
+      "evidence_preserved": true,
+      "removed": [
+        "allocation_paths",
+        "allocation_paths_native"
+      ],
+      "result": "passed"
+    }
+  ],
+  "raw_failure_sha256": "238db09cd65994f793ce2ea4c113575a8308cd80c09885cd5585bbd2ce188de2",
+  "raw_journey_sha256": "853135148c6299d38d04d14a261aec6ab165b0eb7733a668205fc44de982aac1",
+  "source_sha": "e7a0a3c33fbd3636b86aee08f4dd0d08c4d2ab7b",
+  "workflow_url": "https://github.com/STEVVVU/allocation-pattern-analyzer/actions/runs/39722622608"
+}
