@@ -1,0 +1,12 @@
+{
+  "binary": "../build/allocation_paths",
+  "entry": "entry_conditional",
+  "inputs": [{"name": "value", "bits": 32}],
+  "allocators": {"slab_alloc": "slab", "mapping_alloc": "mapping"},
+  "max_steps": 512,
+  "max_states": 256,
+  "timeout_seconds": 30,
+  "seeds": [[0], [1]],
+  "random_seed": 1729,
+  "random_trials": 256
+}

@@ -1,61 +1,35 @@
-# angr
+# Allocation Pattern Analyzer
 
-[![Latest Release](https://img.shields.io/pypi/v/angr.svg)](https://pypi.python.org/pypi/angr/)
-[![Python Version](https://img.shields.io/pypi/pyversions/angr)](https://pypi.python.org/pypi/angr/)
-[![PyPI Statistics](https://img.shields.io/pypi/dm/angr.svg)](https://pypistats.org/packages/angr)
-[![License](https://img.shields.io/github/license/angr/angr.svg)](https://github.com/angr/angr/blob/master/LICENSE)
+Bounded static analysis for allocation-reaching paths in trusted ELF x86-64 programs. The analyzer uses angr 9.2.207 to build a control-flow/call graph and symbolically execute a declared entry point. It reports allocator call-chain candidates separately from satisfiable path witnesses and unknown cases.
 
-angr is a platform-agnostic binary analysis framework.
-It is brought to you by [the Computer Security Lab at UC Santa Barbara](https://seclab.cs.ucsb.edu), [SEFCOM at Arizona State University](https://sefcom.asu.edu), their associated CTF team, [Shellphish](https://shellphish.net), the open source community, and **[@rhelmot](https://github.com/rhelmot)**.
+This repository retains the complete BSD-2-Clause angr source tree and Git history at released tag `v9.2.207` (`9037fb8c6ee4a2df61ba64b7a561373f5eb6b253`). The upstream license, copyright notices, and original README are preserved. The allocation analyzer, controlled fixtures, verification driver, and workflow are coursework additions; they do not replace or claim to reproduce the full angr project.
 
-## Project Links
-Homepage: https://angr.io
+## Run
 
-Project repository: https://github.com/angr/angr
+Use Python 3.11 and install the exact angr release with the dependencies in [`requirements-ci.txt`](requirements-ci.txt). On a clean Linux environment, install Rust toolchain `1.99.1`, then run:
 
-Documentation: https://docs.angr.io
-
-API Documentation: https://docs.angr.io/en/latest/api.html
-
-## What is angr?
-
-angr is a suite of Python 3 libraries that let you load a binary and do a lot of cool things to it:
-
-- Disassembly and intermediate-representation lifting
-- Program instrumentation
-- Symbolic execution
-- Control-flow analysis
-- Data-dependency analysis
-- Value-set analysis (VSA)
-- Decompilation
-
-The most common angr operation is loading a binary: `p = angr.Project('/bin/bash')` If you do this in an enhanced REPL like IPython, you can use tab-autocomplete to browse the [top-level-accessible methods](https://docs.angr.io/core-concepts/toplevel) and their docstrings.
-
-The short version of "how to install angr" is `mkvirtualenv --python=$(which python3) angr && python -m pip install angr`.
-
-## Example
-
-angr does a lot of binary analysis stuff.
-To get you started, here's a simple example of using symbolic execution to get a flag in a CTF challenge.
-
-```python
-import angr
-
-project = angr.Project("angr-doc/examples/defcamp_r100/r100", auto_load_libs=False)
-
-@project.hook(0x400844)
-def print_flag(state):
-    print("FLAG SHOULD BE:", state.posix.dumps(0))
-    project.terminate_execution()
-
-project.execute()
+```sh
+python -m pip install --constraint requirements-ci.txt angr==9.2.207 unicorn==2.1.4
+mkdir -p build
+cc -nostdlib -Wl,-e,entry_direct -Wl,--build-id=none -fno-pie -no-pie -O0 fixtures/allocation_paths.c -o build/allocation_paths
+python -I allocation_analyzer/cli.py analyze --config fixtures/direct.json
+python -I allocation_analyzer/cli.py explore --config fixtures/conditional.json
+python -I tests/test_config.py
+python -I .agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py --phase All
 ```
 
-# Quick Start
+`analyze` emits JSON with syntactic call-graph candidates, feasible symbolic witnesses, allocator category, concrete declared-input values, constraints, executed block traces, and function chains reconstructed from those traces. Static candidate chains remain separate from the witness trace. `explore` compares seed-first selective symbolic exploration, seeded random concrete simulation, and bounded symbolic exploration. Input symbols and all budgets are validated; the binary must be a trusted ELF no larger than 256 MiB. See [`docs/development.md`](docs/development.md) for setup and result semantics, and [`docs/dependency-provenance.md`](docs/dependency-provenance.md) for release and native-build hashes.
 
-- [Install Instructions](https://docs.angr.io/introductory-errata/install)
-- Documentation as [HTML](https://docs.angr.io/) and sources in the angr [Github repository](https://github.com/angr/angr/tree/master/docs)
-- Dive right in: [top-level-accessible methods](https://docs.angr.io/core-concepts/toplevel)
-- [Examples using angr to solve CTF challenges](https://docs.angr.io/examples).
-- [API Reference](https://docs.angr.io/en/latest/api.html)
-- [awesome-angr repo](https://github.com/degrigis/awesome-angr)
+## Research adaptation and measured scope
+
+The seed-first strategy borrows Driller's selective concolic idea: run declared concrete inputs, identify uncovered edges that can reach a declared allocator, and prioritize symbolic execution there. This is a small angr-based adaptation, not a Driller implementation. Its concrete stage symbolically models concrete arguments inside angr; it is not native fuzzing. Native execution is performed separately by the verifier against the owned harmless C fixture.
+
+The course project that motivates allocator-path analysis distinguishes slab allocation from mapping-producing allocation and notes that bounded basic-block exploration can miss paths. This implementation follows that static-analysis framing on small trusted ELF programs; it does not analyze a Linux kernel, identify a vulnerability, establish safety, bypass LASS, exploit Spectre, or measure a side channel. A feasible symbolic witness is a path under the modeled binary and declared interface. `no_witness_observed` means only that the configured bounded run found no witness. Time, state, step, unsupported-call, and unconstrained-successor cases remain explicitly unresolved.
+
+References: [Berkeley CS 262A project report](https://people.eecs.berkeley.edu/~kubitron/courses/cs262a-F25/projects/reports/project1002_paper_ver2_39629115792957488818.pdf) and [Driller: Augmenting Fuzzing Through Selective Symbolic Execution](https://www.ndss-symposium.org/wp-content/uploads/2017/09/driller-augmenting-fuzzing-through-selective-symbolic-execution.pdf).
+
+## Verification
+
+The maintained [`verify-allocation-pattern-analyzer` skill](.agents/skills/verify-allocation-pattern-analyzer/SKILL.md) drives Launch, Doctor, Drive, Evidence, and Cleanup on generated fixtures and retains evidence after cleanup. Windows can compile and analyze the Linux ELF but cannot execute it natively. The pinned, read-only [Ubuntu workflow](.github/workflows/allocation-pattern-checks.yml) runs native counter validation and retains run evidence as a workflow artifact. It can be started with `workflow_dispatch`.
+
+The inherited upstream CI workflow files are preserved byte-for-byte in [`archive/upstream-github-workflows/`](archive/upstream-github-workflows/); this project uses its focused workflow rather than the upstream workflows that call external services and reusable workflows.

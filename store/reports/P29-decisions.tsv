@@ -1,0 +1,6 @@
+date	decision	evidence	consequence
+2026-10-21	Use angr v9.2.207 release commit 9037fb8c6ee4a2df61ba64b7a561373f5eb6b253	Latest checkout required newer unpublished dependencies; the released tag supports Python 3.11	Keep upstream checkout/history intact and import exact installed release
+2026-10-21	Pin bitstring 4.3.1	Initial PEP 517 build resolved bitstring 5.0.0, which removed ConstBitStream imported by angr 9.2.207	Freeze the compatible version in requirements-ci.txt
+2026-10-21	Represent seed-first as bounded angr concolic adaptation	Declared values execute concretely in angr; uncovered allocator-reaching CFG edges receive symbolic priority	Describe it as inspired by Driller, not a Driller implementation or native fuzzer
+2026-10-21	Derive feasible function chains from state block history	A fixture with an infeasible direct edge and feasible wrapper route showed a static shortest callgraph path can misstate the witnessed route	Keep syntactic candidates distinct and expose executed block trace with a completeness flag
+2026-10-21	Keep native fixture execution Linux-only	Local Windows clang/lld emits the Linux ELF, but Windows cannot execute it natively	Record Windows native checks as not run and require hosted Ubuntu proof

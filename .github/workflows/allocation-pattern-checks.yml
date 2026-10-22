@@ -1,0 +1,69 @@
+name: Allocation pattern checks
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: allocation-pattern-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PIP_CONSTRAINT: ${{ github.workspace }}/requirements-ci.txt
+      RUSTUP_TOOLCHAIN: 1.99.1
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.11.9"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Install angr release and native engine
+        run: python -m pip install --constraint requirements-ci.txt angr==9.2.207 unicorn==2.1.4
+      - name: Check pinned release and configuration tests
+        run: |
+          python -I -c "import angr; assert angr.__version__ == '9.2.207'; print(angr.__version__)"
+          python -I tests/test_config.py
+      - name: Drive real analyzer, native fixtures, and cleanup
+        run: python -I .agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py --phase All --run-id ci-${{ github.run_id }}
+      - name: Verify cleanup after injected failure
+        shell: bash
+        run: |
+          set +e
+          python -I .agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py --phase All --run-id ci-failure-${{ github.run_id }} --inject-failure
+          result=$?
+          set -e
+          test "$result" -eq 1
+          python -I - <<'PY'
+          import json
+          from pathlib import Path
+
+          evidence = json.loads(Path('.agents/runs/ci-failure-${{ github.run_id }}/evidence.json').read_text())
+          assert evidence['cleanup_completed'] is True
+          assert evidence['failure']['detail'] == 'injected failure after the native journey'
+          assert any(event['action'] == 'evidence' and event['result'] == 'passed' for event in evidence['events'])
+          print('Injected failure recorded, cleanup completed, evidence retained.')
+          PY
+      - name: Stage verifier evidence for artifact upload
+        if: always()
+        run: |
+          mkdir -p workflow-evidence
+          cp -R .agents/runs/. workflow-evidence/
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v4
+        if: always()
+        with:
+          name: allocation-pattern-evidence-${{ github.run_id }}
+          path: workflow-evidence/
+          if-no-files-found: error
+          retention-days: 30
