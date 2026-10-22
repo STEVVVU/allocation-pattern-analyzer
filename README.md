@@ -33,6 +33,8 @@ References: [Berkeley CS 262A project report](https://people.eecs.berkeley.edu/~
 
 ## Verification
 
+The manual [metrics workflow](.github/workflows/metrics.yml) repeats actual official Linux 6.1 and 6.6 tinyconfig scans on separate Ubuntu runners. Run `python -I .agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py --run-id <fresh-id> --kernel-binary <trusted-vmlinux>` to retain five scan samples, exact input hashes/configs, labeled native fixture strategy results and a separate profile. The [measurement contract](.agents/skills/verify-allocation-pattern-analyzer/features/metrics.md) states the unknowns and resource limits. Full hosted measurements are pending. Earlier candidate counts above do not establish scan performance or kernel feasibility.
+
 The maintained [`verify-allocation-pattern-analyzer` skill](.agents/skills/verify-allocation-pattern-analyzer/SKILL.md) drives Launch, Doctor, Drive, Evidence, and Cleanup on generated fixtures and retains evidence after cleanup. Windows can compile and analyze the Linux ELF but cannot execute it natively. The pinned, read-only [Ubuntu workflow](.github/workflows/allocation-pattern-checks.yml) runs native counter validation and retains run evidence as a workflow artifact. It can be started with `workflow_dispatch`.
 
 The inherited upstream CI workflow files are preserved byte-for-byte in [`archive/upstream-github-workflows/`](archive/upstream-github-workflows/); this project uses its focused workflow rather than the upstream workflows that call external services and reusable workflows.

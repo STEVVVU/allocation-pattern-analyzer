@@ -1,0 +1,9 @@
+# Offline kernel and fixture metrics
+
+Run `python -I .agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py --run-id <fresh-id> --kernel-binary <trusted-vmlinux>` on Ubuntu. `--smoke` permits the tiny owned fixture instead and cannot support kernel performance claims.
+
+The manual metrics workflow has isolated Linux 6.1 and Linux 6.6 runners. The maintained kernel builder accepts only those two official versions with fixed archive SHA-256 from [kernel.org](https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc). Each uses x86-64 tinyconfig with KALLSYMS and KALLSYMS_ALL. Preserve exact `.config`, source provenance, ELF hash, compiler environment and all raw reports. No kernel is booted, installed or probed.
+
+One warmup precedes five whole fresh-process kernel scans with warm OS file cache. All discovered entries must be scanned. Candidate tuples `(entry, allocator, call_chain)` must be unique and identical across repeats. Unknown entries remain unknown. Wall time, peak RSS and child CPU time come from GNU time. A sixth separate cProfile scan diagnoses the limiter and is excluded from measurements. Kernel candidates have no feasibility ground truth and cannot support accuracy, security or vulnerability claims.
+
+Each repeat also drives all existing owned native fixtures and independent exact counter oracles. It retains every strategy's elapsed time, block budget, witnesses, unknowns and deduplicated `(allocator, arguments)` tuples. Feasible, syntactically connected but infeasible, bounded-loop and unsupported-indirect labels remain distinct. The shipped explore command runs strategies in a fixed order and shares CFG setup; these observations cannot establish causal superiority. Raw native validations and labels survive Cleanup. The full scan is bounded to 900 seconds and 8 GiB per child. The full workflow is bounded to two hours per runner.

@@ -5,6 +5,8 @@ description: Drive the allocation-pattern analyzer CLI against owned ELF fixture
 
 # Verify the allocation pattern analyzer
 
+The maintained benchmark entry point and frozen limits are documented in [features/metrics.md](features/metrics.md). The manual `metrics.yml` workflow repeats official Linux 6.1 and 6.6 scans on isolated runners.
+
 The primary surface is the Python CLI in `allocation_analyzer/cli.py`. Use only the isolated Python 3.11 environment documented in `docs/development.md`. The vendored angr checkout is source provenance; the CLI imports the pinned installed release.
 
 ## Launch
