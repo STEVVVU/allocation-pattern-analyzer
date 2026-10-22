@@ -329,10 +329,10 @@ def main() -> int:
                 run.doctor()
             elif phase == "Drive":
                 run.drive()
-                if args.inject_failure:
-                    raise VerificationError("injected failure after the native journey")
             elif phase == "Evidence":
                 run.evidence()
+                if args.inject_failure:
+                    raise VerificationError("injected failure after the native journey")
             elif phase == "Cleanup":
                 run.cleanup()
         print(run.evidence_file)
