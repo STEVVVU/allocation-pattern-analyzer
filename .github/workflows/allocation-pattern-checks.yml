@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 30
     env:
       PIP_CONSTRAINT: ${{ github.workspace }}/requirements-ci.txt
+      PIP_BUILD_CONSTRAINT: ${{ github.workspace }}/requirements-ci.txt
       RUSTUP_TOOLCHAIN: 1.99.1
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -30,7 +31,9 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal
       - name: Install angr release and native engine
-        run: python -m pip install --constraint requirements-ci.txt angr==9.2.207 unicorn==2.1.4
+        run: |
+          python -m pip install pip==26.2.2
+          python -m pip install --constraint requirements-ci.txt --build-constraint requirements-ci.txt angr==9.2.207 unicorn==2.1.4
       - name: Check pinned release and configuration tests
         run: |
           python -I -c "import angr; assert angr.__version__ == '9.2.207'; print(angr.__version__)"

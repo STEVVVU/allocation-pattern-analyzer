@@ -6,7 +6,8 @@ The implementation is based on angr v9.2.207, commit `9037fb8c6ee4a2df61ba64b7a5
 
 ```sh
 rustup toolchain install 1.99.1 --profile minimal
-python -m pip install --constraint requirements-ci.txt angr==9.2.207 unicorn==2.1.4
+python -m pip install pip==26.2.2
+python -m pip install --constraint requirements-ci.txt --build-constraint requirements-ci.txt angr==9.2.207 unicorn==2.1.4
 ```
 
 The angr 9.2.207 source distribution builds its native extension on Python 3.11; PyPI does not publish a matching cp311 wheel for that release. The dependency constraint pins `bitstring==4.3.1` because 5.x removes `ConstBitStream`, which this angr release imports. Rust and a native C toolchain are required to build the exact source release. The generated local Windows wheel is not checked in. The analyzer imports the installed package, not this repository's source checkout.

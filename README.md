@@ -9,7 +9,8 @@ This repository retains the complete BSD-2-Clause angr source tree and Git histo
 Use Python 3.11 and install the exact angr release with the dependencies in [`requirements-ci.txt`](requirements-ci.txt). On a clean Linux environment, install Rust toolchain `1.99.1`, then run:
 
 ```sh
-python -m pip install --constraint requirements-ci.txt angr==9.2.207 unicorn==2.1.4
+python -m pip install pip==26.2.2
+python -m pip install --constraint requirements-ci.txt --build-constraint requirements-ci.txt angr==9.2.207 unicorn==2.1.4
 mkdir -p build
 cc -nostdlib -Wl,-e,entry_direct -Wl,--build-id=none -fno-pie -no-pie -O0 fixtures/allocation_paths.c -o build/allocation_paths
 python -I allocation_analyzer/cli.py analyze --config fixtures/direct.json
