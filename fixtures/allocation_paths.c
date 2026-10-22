@@ -18,6 +18,19 @@ __attribute__((noinline, used, visibility("default"))) void mapping_alloc(void) 
     mapping_count++;
 }
 
+__attribute__((noinline, used, visibility("default"))) void kmalloc(void) {
+    slab_alloc();
+}
+
+__attribute__((noinline, used, visibility("default"))) void vmalloc(void) {
+    mapping_alloc();
+}
+
+__attribute__((noinline, used, visibility("default"))) long __x64_sys_fixture(unsigned long value) {
+    if (value == 0x6b65726eU) kmalloc();
+    return 0;
+}
+
 __attribute__((noinline, used, visibility("default"))) int entry_direct(uint32_t value) {
     if (value == 7) slab_alloc();
     return 0;

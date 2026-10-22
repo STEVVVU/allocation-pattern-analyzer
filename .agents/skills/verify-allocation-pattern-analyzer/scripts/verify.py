@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -24,7 +25,7 @@ class VerificationError(RuntimeError):
 
 
 class Run:
-    def __init__(self, run_id: str):
+    def __init__(self, run_id: str, kernel_binary: Path | None = None):
         self.run_id = run_id
         self.directory = RUNS / run_id
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -33,18 +34,28 @@ class Run:
         self.data: dict = {"run_id": run_id, "platform": platform.platform(), "events": [], "cleanup_completed": False}
         self.binary = self.directory / ("allocation_paths.elf" if os.name == "nt" else "allocation_paths")
         self.native = self.directory / ("allocation_paths_native.exe" if os.name == "nt" else "allocation_paths_native")
+        self.kernel_binary = kernel_binary.resolve() if kernel_binary else None
 
     def event(self, action: str, result: str, **details) -> None:
         self.data["events"].append({"action": action, "result": result, **details})
         self.evidence_file.write_text(json.dumps(self.data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    def command(self, args: list[str], timeout: int = 600, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    def command(self, args: list[str], timeout: int = 600, env: dict[str, str] | None = None,
+                memory_limit_mb: int | None = None) -> subprocess.CompletedProcess:
         self.transcript.parent.mkdir(parents=True, exist_ok=True)
         with self.transcript.open("a", encoding="utf-8") as stream:
             stream.write("$ " + json.dumps(args) + "\n")
             stream.flush()
             try:
-                result = subprocess.run(args, cwd=ROOT, env=env, text=True, capture_output=True, timeout=timeout, check=False)
+                preexec = None
+                if memory_limit_mb is not None and os.name != "nt":
+                    def set_memory_limit() -> None:
+                        import resource
+                        limit = memory_limit_mb * 1024 * 1024
+                        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+                    preexec = set_memory_limit
+                result = subprocess.run(args, cwd=ROOT, env=env, text=True, capture_output=True, timeout=timeout,
+                                        check=False, preexec_fn=preexec)
             except subprocess.TimeoutExpired as exc:
                 stream.write(f"TIMEOUT after {timeout} seconds\n")
                 if exc.stdout:
@@ -123,7 +134,7 @@ class Run:
     def analyze(self, mode: str, entry: str, *, seeds: list[list[int]] | None = None,
                 inputs: list[dict] | None = None, max_steps: int = 512) -> dict:
         config = self.config(entry, seeds=seeds, inputs=inputs, max_steps=max_steps)
-        result = self.command([sys.executable, str(CLI), mode, "--config", str(config)], timeout=180)
+        result = self.command([sys.executable, "-I", str(CLI), mode, "--config", str(config)], timeout=180)
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError as exc:
@@ -250,6 +261,11 @@ class Run:
         if not unsupported["analysis"]["unknown"]:
             raise VerificationError("unsupported indirect call was not reported as unresolved")
         checks.append({"entry": "entry_unsupported", "report": unsupported, "native": "intentionally_not_executed"})
+        self.data["fixture_kernel_scan"] = self.analyze_kernel(
+            self.binary, "kernel-scan-fixture.json", analyze_entry="__x64_sys_fixture",
+        )
+        if self.kernel_binary is not None:
+            self.data["kernel_scan"] = self.analyze_kernel(self.kernel_binary, "kernel-scan.json")
         exploration = next(item["report"] for item in checks if item["entry"] == "entry_conditional")
         strategies = exploration["strategies"]
         if strategies["seeded_random"]["steps"] != 512 or strategies["seeded_random"]["witnesses"]:
@@ -267,6 +283,61 @@ class Run:
             for item in checks
             if isinstance(item.get("native"), list)
         ), comparison=metrics)
+
+    def analyze_kernel(self, binary: Path, artifact_name: str, analyze_entry: str | None = None) -> dict:
+        binary = binary.resolve()
+        if not binary.is_file():
+            raise VerificationError(f"kernel ELF does not exist: {binary}")
+        args = [sys.executable, "-I", str(CLI), "kernel-scan", "--binary", str(binary), "--max-entries", "5000"]
+        if analyze_entry is not None:
+            args.extend(["--analyze-entry", analyze_entry, "--max-steps", "32", "--max-states", "32",
+                         "--timeout-seconds", "5"])
+        result = self.command(args, timeout=900, memory_limit_mb=8192 if os.name != "nt" else None)
+        try:
+            report = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise VerificationError("kernel scanner did not return JSON") from exc
+        symbols = report["symbols"]
+        if report["architecture"] != "ELF x86-64" or symbols["syscall_entries_discovered"] < 1:
+            raise VerificationError("kernel ELF did not yield x86-64 syscall symbols")
+        if symbols["syscall_entries_scanned"] != symbols["syscall_entries_discovered"]:
+            raise VerificationError("kernel scan truncated the discovered syscall set")
+        if not symbols["allocation_symbols_found"]:
+            raise VerificationError("kernel ELF did not yield a known allocation symbol")
+        candidates = sum(len(entry["candidates"]) for entry in report["entries"])
+        if candidates < 1:
+            raise VerificationError("kernel CFG yielded no syscall-to-allocation candidate")
+        if analyze_entry is not None:
+            bounded = report.get("bounded_symbolic_analysis", {})
+            if (bounded.get("entry") != analyze_entry or bounded.get("kernel_state") != "not_modeled" or
+                    bounded.get("status") != "exploratory_bounded_model" or
+                    any(item.get("status") != "bounded_model_witness" for item in bounded.get("model_witnesses", []))):
+                raise VerificationError("bounded kernel-style analysis omitted its explicit unknown-state label")
+        scan_path = self.directory / artifact_name
+        scan_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        source_dir = binary.parent.parent
+        manifest = source_dir / "source-provenance.txt"
+        config_file = binary.parent / ".config"
+        provenance = None
+        if manifest.is_file() and config_file.is_file():
+            manifest_copy = self.directory / "kernel-source-provenance.txt"
+            config_copy = self.directory / "linux-6.6.config"
+            shutil.copyfile(manifest, manifest_copy)
+            shutil.copyfile(config_file, config_copy)
+            provenance = {"source_manifest": manifest_copy.name, "config": config_copy.name,
+                          "config_sha256": _sha256(config_copy)}
+        return {"artifact": str(scan_path.relative_to(ROOT)),
+                "syscall_entries_discovered": symbols["syscall_entries_discovered"],
+                "syscall_entries_scanned": symbols["syscall_entries_scanned"],
+                "allocation_symbols_found": symbols["allocation_symbols_found"],
+                "candidate_paths": candidates,
+                "bounded_symbolic_status": report.get("bounded_symbolic_analysis", {}).get("status", "not_run"),
+                "binary_bytes": binary.stat().st_size,
+                "sha256": _sha256(binary),
+                "external_process_limits": {"timeout_seconds": 900, "address_space_mb": 8192}
+                if os.name != "nt" else {"timeout_seconds": 900, "address_space_mb": None},
+                "source_provenance": provenance,
+                "analysis_kind": "syntactic callgraph candidates only"}
 
     def _validate_no_allocation(self, mode: str, value: int) -> dict:
         outcome, expected = self.native_oracle_check("entry_infeasible", [value])
@@ -316,10 +387,11 @@ def main() -> int:
     parser.add_argument("--phase", choices=("Launch", "Doctor", "Drive", "Evidence", "Cleanup", "All"), default="All")
     parser.add_argument("--run-id", default=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
     parser.add_argument("--inject-failure", action="store_true")
+    parser.add_argument("--kernel-binary", type=Path)
     args = parser.parse_args()
     if not re_run_id(args.run_id):
         parser.error("run-id must contain only letters, numbers, period, underscore, or hyphen")
-    run = Run(args.run_id)
+    run = Run(args.run_id, args.kernel_binary)
     phases = ["Launch", "Doctor", "Drive", "Evidence", "Cleanup"] if args.phase == "All" else [args.phase]
     try:
         for phase in phases:
@@ -352,6 +424,14 @@ def main() -> int:
 
 def re_run_id(value: str) -> bool:
     return bool(value) and all(character.isalnum() or character in "._-" for character in value)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 if __name__ == "__main__":

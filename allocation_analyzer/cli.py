@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RETURN_ADDRESS = 0xF00DCAFE
@@ -503,13 +506,45 @@ class Analyzer:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Find bounded allocation paths in a trusted ELF x86-64 binary.")
-    parser.add_argument("mode", choices=("analyze", "explore"))
-    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("mode", choices=("analyze", "explore", "kernel-scan"))
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--binary", type=Path)
+    parser.add_argument("--syscall-prefix", default="__x64_sys_")
+    parser.add_argument("--max-entries", type=int, default=500)
+    parser.add_argument("--analyze-entry")
+    parser.add_argument("--max-steps", type=int, default=512)
+    parser.add_argument("--max-states", type=int, default=256)
+    parser.add_argument("--timeout-seconds", type=int, default=30)
     args = parser.parse_args(argv)
     try:
-        config = load_config(args.config.resolve())
-        analyzer = Analyzer(config)
-        result = analyzer.analyze() if args.mode == "analyze" else analyzer.explore()
+        if args.mode == "kernel-scan":
+            if args.binary is None or args.config is not None:
+                raise InputError("kernel-scan requires --binary and does not accept --config")
+            if not 1 <= args.max_entries <= 5000:
+                raise InputError("max-entries must be from 1 through 5000")
+            if not 1 <= args.max_steps <= 100_000 or not 1 <= args.max_states <= 10_000:
+                raise InputError("kernel scan analysis bounds are outside supported limits")
+            if not 1 <= args.timeout_seconds <= 300:
+                raise InputError("timeout-seconds must be from 1 through 300")
+            if __package__:
+                from .kernel_scan import KernelScanError, scan_kernel
+            else:
+                from kernel_scan import KernelScanError, scan_kernel
+            try:
+                result = scan_kernel(
+                    args.binary, analyzer_types=(Analyzer, Config, Input),
+                    syscall_prefix=args.syscall_prefix, max_entries=args.max_entries,
+                    analyze_entry=args.analyze_entry, max_steps=args.max_steps,
+                    max_states=args.max_states, timeout_seconds=args.timeout_seconds,
+                )
+            except KernelScanError as exc:
+                raise InputError(str(exc)) from exc
+        else:
+            if args.config is None or args.binary is not None:
+                raise InputError(f"{args.mode} requires --config and does not accept --binary")
+            config = load_config(args.config.resolve())
+            analyzer = Analyzer(config)
+            result = analyzer.analyze() if args.mode == "analyze" else analyzer.explore()
     except (InputError, OSError) as exc:
         print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
         return 2
