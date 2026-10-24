@@ -4,6 +4,122 @@ Bounded static analysis for allocation-reaching paths in trusted ELF x86-64 prog
 
 This repository retains the complete BSD-2-Clause angr source tree and Git history at released tag `v9.2.207` (`9037fb8c6ee4a2df61ba64b7a561373f5eb6b253`). The upstream license, copyright notices, and original README are preserved. The allocation analyzer, controlled fixtures, verification driver, and workflow are coursework additions; they do not replace or claim to reproduce the full angr project.
 
+## Guide
+
+[Architecture and execution guide](#architecture-and-execution-guide) · [Run](#run) · [Research adaptation and measured scope](#research-adaptation-and-measured-scope) · [Verification](#verification)
+
+## Architecture and execution guide
+
+The repository extends angr with bounded analyses of trusted ELF inputs and controlled C fixtures. The inherited angr framework supplies project loading, [CFG](#control-flow-graph) construction and [symbolic execution](#symbolic-execution). Project code validates user configuration, finds call paths to known allocators, explores declared interfaces and classifies unresolved cases. Kernel scans report [syntactic candidates](#syntactic-candidate); they do not prove runtime allocation or a vulnerability.
+
+```mermaid
+flowchart LR
+  N1["Trusted ELF and config"] --> N2["CLI validation"]
+  N2["CLI validation"] --> N3["angr project and analyses"]
+  N3["angr project and analyses"] --> N4["Candidate paths and bounded witnesses"]
+  N4["Candidate paths and bounded witnesses"] --> N5["JSON result with limits"]
+  N6["Controlled fixture"] --> N7["Native verifier and counter oracle"]
+```
+
+Caption: offline analysis reports candidate paths and modeled witnesses, while the verifier separately runs only the project's owned harmless fixtures.
+
+```mermaid
+flowchart TD
+  subgraph Validate["Input boundary"]
+    N1["JSON config or kernel ELF"] --> N2["Check schema, size, ELF and architecture"]
+    N2 -->|"invalid"| N3["Invalid input"]
+    N3["Invalid input"] --> N4["Input error"]
+  end
+  subgraph Analyze["Analysis"]
+    N5["Validated interface"] --> N6["Build CFG and callgraph"]
+    N6["Build CFG and callgraph"] --> N7["Find paths to declared allocators"]
+    N8["Candidate and declared inputs"] --> N9["Bounded symbolic execution"]
+    N10["Bound reached or unsupported behavior"] --> N11["Unknown status"]
+    N12["Feasible modeled path"] --> N13["Witness status"]
+  end
+  N2 -->|"valid"| N5
+  N7 --> N17["Callgraph candidates"]
+  N7 -->|"optional declared input model"| N8
+  N9 -->|"limit or unsupported state"| N10
+  N9 -->|"modeled allocation reached"| N12
+  subgraph Verify["Owned fixture check"]
+    N14["Generated C fixture"] --> N15["Native execution"]
+    N15["Native execution"] --> N16["Allocation counters and oracle"]
+  end
+  N17 --> N18["JSON result with limits"]
+  N11["Unknown status"] --> N18["JSON result with limits"]
+  N13["Witness status"] --> N18["JSON result with limits"]
+```
+
+Caption: validation rejects malformed or out-of-scope inputs. Static candidates then feed bounded symbolic exploration, whose unknown outcomes remain explicit; native counters validate only generated fixture behavior.
+
+| Subsystem | Responsibility and owned state | Source |
+| --- | --- | --- |
+| CLI and config validation | Validates exact JSON keys, symbols, ELF type and declared budgets. | [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py) |
+| Symbolic analyzer | Runs bounded exploration over a declared entry and input model. | [`allocation_analyzer/`](allocation_analyzer/) |
+| Kernel candidate scan | Builds an x86-64 CFG and indexes paths from syscall symbols to known allocators. | [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py) |
+| Fixtures and oracle | Supplies harmless C programs and checks native allocation counters against expected behavior. | [`fixtures/`](fixtures/), [verification skill](.agents/skills/verify-allocation-pattern-analyzer/SKILL.md) |
+| Evidence workflow | Runs fixture and kernel workflows with limits and retained receipts. | [Workflow](.github/workflows/allocation-pattern-checks.yml), [verification feature map](.agents/skills/verify-allocation-pattern-analyzer/features/) |
+
+Execution journey:
+
+1. The CLI reads a JSON config or kernel ELF path and checks fields, bounds, format and architecture before analysis.
+2. angr loads the trusted binary. For kernel scan, CFGFast builds a graph and the scanner finds syscall entry symbols and known allocator symbols.
+3. The scanner reports syntactic callgraph paths. Optional symbolic analysis explores a declared entry with bounded steps, states and time.
+4. A feasible path under the modeled inputs becomes a [witness](#witness). A timeout, step limit, unsupported call or unconstrained successor remains an explicit [unknown](#unknown-status); no witness found is not proof of absence.
+5. The separate verifier runs generated harmless C fixtures natively and compares allocation counters with an oracle. It does not execute analyzed kernel code.
+
+| Choice in the current implementation | Practical rationale | Alternative and cost to reconsider |
+| --- | --- | --- |
+| Treat kernel scan as static callgraph candidate indexing. | It can cover many syscall entry points without claiming concrete execution. | Dynamic kernel execution needs controlled kernel infrastructure and a different trust boundary. |
+| Require a bounded declared input model for symbolic exploration. | The result states which inputs and budgets produced a witness. | Unbounded exploration can stall or exhaust resources and still cannot model all system state. |
+| Preserve unknown statuses for limits and unsupported behavior. | A missing witness under a limit is not evidence that a path is impossible. | Collapsing unknown into negative would overstate what the analyzer established. |
+| Validate execution separately with owned fixtures and native counters. | The harmless C fixture supplies exact behavior the static model can be checked against. | Running arbitrary analyzed targets would cross the repository's permitted execution boundary. |
+
+These rationales are inferred from the implementation; measurements and claims remain limited to their recorded inputs and model.
+
+<a id="control-flow-graph"></a>
+
+<details><summary>What is a control-flow graph?</summary>
+
+A control-flow graph (CFG) represents possible function or basic-block transitions in a binary. The kernel scanner uses angr's CFGFast output to find graph paths from syscall symbols to allocator symbols.
+</details>
+
+<a id="syntactic-candidate"></a>
+
+<details><summary>What is a syntactic candidate?</summary>
+
+A syntactic candidate is a callgraph path from an entry point to a known allocator. It does not show that runtime conditions permit the path. The kernel scan labels such paths as candidates for that reason.
+</details>
+
+<a id="symbolic-execution"></a>
+
+<details><summary>What is symbolic execution?</summary>
+
+Symbolic execution follows program operations while representing selected inputs as symbolic values. Here, the analyzer uses declared function arguments and stops at configured state, step or time bounds.
+</details>
+
+<a id="witness"></a>
+
+<details><summary>What is a witness?</summary>
+
+A witness is an input assignment that reaches the modeled allocation event along an explored path. It is evidence about the modeled binary and interface, not proof of a kernel vulnerability or exploitability.
+</details>
+
+<a id="unknown-status"></a>
+
+<details><summary>What does an unknown status mean?</summary>
+
+An unknown status means the analysis could not decide the case within its model or budget. For example, a `step_limit` result says the configured exploration stopped before it found or ruled out a witness.
+</details>
+
+<a id="native-counter"></a>
+
+<details><summary>What is a native counter oracle?</summary>
+
+A native counter oracle compares actual allocation counters from a controlled fixture with expected counts. The verifier uses this for generated C programs; the oracle does not validate behavior in an arbitrary kernel image.
+</details>
+
 ## Run
 
 Use Python 3.11 and install the exact angr release with the dependencies in [`requirements-ci.txt`](requirements-ci.txt). On a clean Linux environment, install Rust toolchain `1.99.1`, then run:
