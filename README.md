@@ -6,6 +6,379 @@ This repository retains the complete BSD-2-Clause angr source tree and Git histo
 
 ## Architecture and execution guide
 
+<!-- execution-flow:start -->
+### Execution flow
+
+Start with the primary path, then expand a detailed workflow. Select a numbered node to see its operation, implementation techniques, and source. Solid arrows show the named control, data, or lifecycle handoff; dotted arrows show error paths. Separate entry points are named in each workflow.
+
+<a id="review-walkthrough"></a>
+
+#### Walk through one concrete example
+
+Run configured analysis on a supplied ELF using the bounded symbolic exploration mode and the configured state and call-depth limits.
+
+**Trace.** [Select CLI mode and validate options](#flow-step-cli-mode) → [Validate config and ELF input](#flow-step-config-elf) → [Build normalized control-flow graph](#flow-step-cfg-build) → [Explore bounded symbolic states](#flow-step-bounded-symbolic) → [Check allocator states and extract witnesses](#flow-step-coherent-witness) → [Return candidates, witnesses and bounds](#flow-step-analysis-report).
+
+**Result and boundary.** The analyzer validates its configuration and ELF, builds a normalized control-flow graph, explores within configured bounds, checks allocator states for coherent witnesses, and returns candidates, witnesses, and bounds. A bounded result can omit paths beyond those limits and is not a proof about all executions.
+
+<details>
+<summary>Implementation decisions to explain</summary>
+
+**Why bound symbolic execution?** Explicit state and depth limits keep exploration finite and make its scope reportable. The tradeoff is that behaviors outside those bounds can remain unexplored.
+
+[Bounded symbolic execution with explicit unknown outcomes](#technique-bounded-symbolic-execution).
+
+**Why check allocator states before reporting a witness?** A candidate path alone may not describe a coherent allocation lifecycle, so the analyzer traces allocator state before emitting a witness. This narrows reports to modeled evidence but depends on the supported allocator model.
+
+[Coherent witness extraction and executed-path tracing](#technique-coherent-witness-tracing).
+
+</details>
+
+#### Primary execution flow
+
+The analyzer CLI dispatches configured ELF analysis and seed-first exploration; kernel scan is a separate mode with an optional symbolic-model branch. The graph shows the analyzer output boundary, while fixture validation and measurements run through separate maintained drivers.
+
+```mermaid
+flowchart TD
+    n1["1. Select CLI mode and validate<br/>options"]
+    click n1 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-cli-mode" "Open step, techniques, and source" _top
+    n2["2. Validate config and ELF input"]
+    click n2 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-config-elf" "Open step, techniques, and source" _top
+    n3["3. Build CFG and find callgraph<br/>candidates"]
+    click n3 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-cfg-candidates" "Open step, techniques, and source" _top
+    n4["4. Explore bounded symbolic<br/>states"]
+    click n4 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-bounded-symbolic" "Open step, techniques, and source" _top
+    n5["5. Check allocator states and<br/>extract witnesses"]
+    click n5 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-coherent-witness" "Open step, techniques, and source" _top
+    n6["6. Return candidates, witnesses<br/>and bounds"]
+    click n6 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-analysis-report" "Open step, techniques, and source" _top
+    n7["7. Run supplied concrete seeds<br/>first"]
+    click n7 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-explore-seeds" "Open step, techniques, and source" _top
+    n8["8. Run seeded-random and<br/>symbolic controls"]
+    click n8 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-explore-controls" "Open step, techniques, and source" _top
+    n9["9. Return strategy witnesses and<br/>unknowns"]
+    click n9 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-explore-report" "Open step, techniques, and source" _top
+    n10["10. Validate kernel ELF and scan<br/>bounds"]
+    click n10 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-kernel-validate" "Open step, techniques, and source" _top
+    n11["11. Report syscall callgraph<br/>candidates"]
+    click n11 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-kernel-candidates" "Open step, techniques, and source" _top
+    n12["12. Optionally model one syscall<br/>entry"]
+    click n12 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-kernel-optional-model" "Open step, techniques, and source" _top
+    n16["16. Build normalized<br/>control-flow graph"]
+    click n16 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-cfg-build" "Open step, techniques, and source" _top
+    n1 -->|"analyze or explore"| n2
+    n2 -->|"valid Analyzer input"| n16
+    n16 -->|"CFG built before bounded run"| n4
+    n4 -->|"allocator state reached"| n5
+    n5 -->|"symbolic result"| n6
+    n2 -->|"explore mode"| n7
+    n7 -->|"after seed-first stage"| n8
+    n8 -->|"three strategy results"| n9
+    n1 -->|"kernel-scan mode"| n10
+    n10 -->|"valid kernel ELF"| n11
+    n11 -->|"analyze-entry supplied"| n12
+    n4 -->|"Bounded run returns with no witnesses<br/>or unknown paths"| n6
+    n4 -->|"run returns before candidates() is<br/>evaluated for report"| n3
+    n3 -->|"syntactic candidate paths populate<br/>report"| n6
+```
+
+**Detailed workflows.** [Analyze a configured ELF](#flow-workflow-configured-analysis) · [Compare exploration strategies](#flow-workflow-strategy-exploration) · [Scan kernel ELF candidates](#flow-workflow-kernel-scan) · [Validate fixture behavior and measure scans](#flow-workflow-fixture-verification-and-measurement).
+
+<a id="flow-workflow-configured-analysis"></a>
+
+<details>
+<summary>Analyze a configured ELF</summary>
+
+Starts at the analyze CLI mode, validates trusted ELF/config values, reports syntactic paths and bounded symbolic results. Reaching a witness does not validate native behavior.
+
+```mermaid
+flowchart TD
+    n1["1. Select CLI mode and validate<br/>options"]
+    click n1 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-cli-mode" "Open step, techniques, and source" _top
+    n2["2. Validate config and ELF input"]
+    click n2 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-config-elf" "Open step, techniques, and source" _top
+    n3["3. Build CFG and find callgraph<br/>candidates"]
+    click n3 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-cfg-candidates" "Open step, techniques, and source" _top
+    n4["4. Explore bounded symbolic<br/>states"]
+    click n4 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-bounded-symbolic" "Open step, techniques, and source" _top
+    n5["5. Check allocator states and<br/>extract witnesses"]
+    click n5 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-coherent-witness" "Open step, techniques, and source" _top
+    n6["6. Return candidates, witnesses<br/>and bounds"]
+    click n6 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-analysis-report" "Open step, techniques, and source" _top
+    n16["16. Build normalized<br/>control-flow graph"]
+    click n16 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-cfg-build" "Open step, techniques, and source" _top
+    n1 -->|"analyze mode"| n2
+    n2 -->|"input accepted"| n16
+    n16 -->|"CFG built before bounded run"| n4
+    n4 -->|"allocator reached"| n5
+    n5 -->|"result data"| n6
+    n4 -->|"Bounded run returns with no witnesses<br/>or unknown paths"| n6
+    n4 -->|"run returns before candidates() is<br/>evaluated for report"| n3
+    n3 -->|"syntactic candidate paths populate<br/>report"| n6
+```
+
+</details>
+
+<a id="flow-workflow-strategy-exploration"></a>
+
+<details>
+<summary>Compare exploration strategies</summary>
+
+Starts at explore mode and runs seeded concrete inputs, selective symbolic exploration, deterministic random inputs and plain symbolic exploration under the configured budgets.
+
+```mermaid
+flowchart TD
+    n1["1. Select CLI mode and validate<br/>options"]
+    click n1 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-cli-mode" "Open step, techniques, and source" _top
+    n2["2. Validate config and ELF input"]
+    click n2 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-config-elf" "Open step, techniques, and source" _top
+    n7["7. Run supplied concrete seeds<br/>first"]
+    click n7 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-explore-seeds" "Open step, techniques, and source" _top
+    n8["8. Run seeded-random and<br/>symbolic controls"]
+    click n8 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-explore-controls" "Open step, techniques, and source" _top
+    n9["9. Return strategy witnesses and<br/>unknowns"]
+    click n9 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-explore-report" "Open step, techniques, and source" _top
+    n1 -->|"explore mode"| n2
+    n2 -->|"Analyzer initialized"| n7
+    n7 -->|"seed stage complete"| n8
+    n8 -->|"strategy outputs"| n9
+```
+
+</details>
+
+<a id="flow-workflow-kernel-scan"></a>
+
+<details>
+<summary>Scan kernel ELF candidates</summary>
+
+Starts at kernel-scan mode. CFG callgraph paths remain syntactic candidates. An optional analyze-entry branch uses a single placeholder symbolic value and is not a kernel-state execution proof.
+
+```mermaid
+flowchart TD
+    n1["1. Select CLI mode and validate<br/>options"]
+    click n1 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-cli-mode" "Open step, techniques, and source" _top
+    n10["10. Validate kernel ELF and scan<br/>bounds"]
+    click n10 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-kernel-validate" "Open step, techniques, and source" _top
+    n11["11. Report syscall callgraph<br/>candidates"]
+    click n11 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-kernel-candidates" "Open step, techniques, and source" _top
+    n12["12. Optionally model one syscall<br/>entry"]
+    click n12 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-kernel-optional-model" "Open step, techniques, and source" _top
+    n1 -->|"kernel-scan mode"| n10
+    n10 -->|"ELF and architecture accepted"| n11
+    n11 -->|"analyze-entry supplied"| n12
+```
+
+</details>
+
+<a id="flow-workflow-fixture-verification-and-measurement"></a>
+
+<details>
+<summary>Validate fixture behavior and measure scans</summary>
+
+The verifier runs harmless fixture inputs against native counters and a separate deterministic oracle. The benchmark workflow repeats kernel scans and strategy cells, fingerprints candidates, and retains evidence; neither supplies kernel truth labels.
+
+```mermaid
+flowchart TD
+    n13["13. Compare analyzer results<br/>with fixture counters"]
+    click n13 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-fixture-oracle" "Open step, techniques, and source" _top
+    n14["14. Bound verifier processes and<br/>retain evidence"]
+    click n14 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-verify-lifecycle" "Open step, techniques, and source" _top
+    n15["15. Repeat scans and compare<br/>fingerprints"]
+    click n15 href "https://github.com/STEVVVU/allocation-pattern-analyzer#flow-step-repeat-measurement" "Open step, techniques, and source" _top
+    n14 -->|"drive validates generated fixture<br/>witnesses with native oracle"| n13
+```
+
+</details>
+
+#### Steps, techniques, and source
+
+These source traces cover the active scope below. They explain implementation behavior; benchmark results and their limits remain in the measurement sections.
+
+<a id="flow-step-cli-mode"></a>
+
+##### 1. Select CLI mode and validate options
+
+**Component.** allocation_analyzer.cli.main. The CLI accepts analyze, explore, or kernel-scan. It requires a JSON config for the first two, a binary for kernel-scan, and rejects incompatible arguments or out-of-range bounds.
+
+This step dispatches the three public CLI modes and rejects invalid flag combinations.
+
+**Source.** [`allocation_analyzer/cli.py:507`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L507). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-config-elf"></a>
+
+##### 2. Validate config and ELF input
+
+**Component.** allocation_analyzer.cli.load_config and Analyzer.__init__. load_config requires an exact JSON key set, bounded integer inputs, allocator categories, seeds and limits, plus an ELF file no larger than 256 MiB. Analyzer then rejects non-AMD64 files and missing or imported entry and allocator symbols.
+
+**Techniques at this step.** [Strict configuration and trusted ELF validation](#technique-config-trust-boundary).
+
+**Source.** [`allocation_analyzer/cli.py:60`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L60) · [`allocation_analyzer/cli.py:129`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L129). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-cfg-candidates"></a>
+
+##### 3. Build CFG and find callgraph candidates
+
+**Component.** allocation_analyzer.cli.Analyzer. CFGFast builds a normalized control-flow graph and callgraph. The analyzer reports shortest entry-to-allocator paths as syntactic candidates, without claiming that their conditions are feasible.
+
+**Techniques at this step.** [CFG and callgraph candidate search](#technique-cfg-candidate-search).
+
+**Source.** [`allocation_analyzer/cli.py:153`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L153) · [`allocation_analyzer/cli.py:157`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L157). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-bounded-symbolic"></a>
+
+##### 4. Explore bounded symbolic states
+
+**Component.** allocation_analyzer.cli.Analyzer._symbolic_run. The analyzer starts a call state with declared symbolic integer arguments and explores successors within step, state and time bounds. Solver or unsupported-execution errors, unconstrained successors, and exhausted bounds become explicit unknown outcomes.
+
+**Techniques at this step.** [Bounded symbolic execution with explicit unknown outcomes](#technique-bounded-symbolic-execution).
+
+**Source.** [`allocation_analyzer/cli.py:175`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L175). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-coherent-witness"></a>
+
+##### 5. Check allocator states and extract witnesses
+
+**Component.** allocation_analyzer.cli.Analyzer._symbolic_run. At a declared allocator state, the analyzer checks satisfiability and evaluates one concatenated bitvector so all returned arguments come from one model. It records the executed block/function trace and keeps incomplete traces marked incomplete.
+
+**Techniques at this step.** [Coherent witness extraction and executed-path tracing](#technique-coherent-witness-tracing).
+
+**Source.** [`allocation_analyzer/cli.py:175`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L175) · [`allocation_analyzer/cli.py:302`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L302). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-analysis-report"></a>
+
+##### 6. Return candidates, witnesses and bounds
+
+**Component.** allocation_analyzer.cli.Analyzer.analyze. The analyze report combines CFG candidate paths with symbolic witnesses, status, unknown causes, configured bounds and measured exploration counters. A candidate without a witness is not proof that the path is impossible.
+
+This step assembles the public analysis result from already computed candidates and bounded outcomes.
+
+**Source.** [`allocation_analyzer/cli.py:378`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L378). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-explore-seeds"></a>
+
+##### 7. Run supplied concrete seeds first
+
+**Component.** allocation_analyzer.cli.Analyzer.explore. Explore executes configured seed tuples concretely, accumulating visited blocks and edges under the shared step and timeout budget. It then prioritizes symbolic successors that enter allocator-reachable blocks along edges not covered by those seeds.
+
+**Techniques at this step.** [Seed-first selective concolic exploration](#technique-seed-first-selective-exploration).
+
+**Source.** [`allocation_analyzer/cli.py:410`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L410). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-explore-controls"></a>
+
+##### 8. Run seeded-random and symbolic controls
+
+**Component.** allocation_analyzer.cli.Analyzer.explore. After seed-first exploration, the CLI generates deterministic random tuples from random_seed and runs concrete exploration, then runs plain bounded symbolic exploration. The three strategies share the CFG build and fixed order; this does not establish causal superiority.
+
+**Techniques at this step.** [Deterministic random and plain-symbolic controls](#technique-exploration-control-strategies).
+
+**Source.** [`allocation_analyzer/cli.py:410`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L410). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-explore-report"></a>
+
+##### 9. Return strategy witnesses and unknowns
+
+**Component.** allocation_analyzer.cli.Analyzer._merge and explore. The report merges block, step, witness and unknown data for each strategy. It labels native validation as not run by the analyzer; the separate verification driver checks witness arguments against fixture counters.
+
+This step serializes already computed strategy outputs and distinguishes analyzer output from later native validation.
+
+**Source.** [`allocation_analyzer/cli.py:492`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L492). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-kernel-validate"></a>
+
+##### 10. Validate kernel ELF and scan bounds
+
+**Component.** allocation_analyzer.kernel_scan.scan_kernel. The kernel path checks ELF signature, file size, AMD64 architecture, prefix length and caller-provided limits. It builds CFGFast, discovers matching syscall function symbols, and indexes known allocator symbols.
+
+**Techniques at this step.** [Strict configuration and trusted ELF validation](#technique-config-trust-boundary).
+
+**Source.** [`allocation_analyzer/kernel_scan.py:28`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/kernel_scan.py#L28). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-kernel-candidates"></a>
+
+##### 11. Report syscall callgraph candidates
+
+**Component.** allocation_analyzer.kernel_scan.scan_kernel. For each selected syscall symbol, the scanner finds shortest callgraph paths to known allocators. Missing paths are labeled unknown_no_candidate_observed; the report says that CFG paths are syntactic and that kernel state is not modeled.
+
+**Techniques at this step.** [CFG and callgraph candidate search](#technique-cfg-candidate-search).
+
+**Source.** [`allocation_analyzer/kernel_scan.py:54`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/kernel_scan.py#L54). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-kernel-optional-model"></a>
+
+##### 12. Optionally model one syscall entry
+
+**Component.** allocation_analyzer.kernel_scan._analyze_entry. When analyze-entry is supplied, the scanner creates one symbolic 64-bit syscall_context input and calls the generic analyzer. It labels the result exploratory_bounded_model and explicitly says pt_regs, user memory and kernel state are not modeled.
+
+**Techniques at this step.** [Bounded symbolic execution with explicit unknown outcomes](#technique-bounded-symbolic-execution).
+
+**Source.** [`allocation_analyzer/kernel_scan.py:115`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/kernel_scan.py#L115). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-fixture-oracle"></a>
+
+##### 13. Compare analyzer results with fixture counters
+
+**Component.** fixtures/allocation_paths.c and verify.py. The verifier compiles and runs only the owned harmless fixture, then compares native allocation counters with a separate deterministic Python oracle. It also checks generated witness inputs against the expected fixture category; this is verification, not kernel ground truth.
+
+**Techniques at this step.** [Native counter instrumentation and independent oracle](#technique-native-counter-oracle).
+
+**Source.** [`fixtures/allocation_paths.c:13`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/fixtures/allocation_paths.c#L13) · [`.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py:166`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L166). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-verify-lifecycle"></a>
+
+##### 14. Bound verifier processes and retain evidence
+
+**Component.** verify.py and GitHub Actions workflow. The maintained verifier bounds subprocess execution, records run evidence, and cleans up its owned processes while retaining evidence. The CI job also sets a 30-minute job timeout and checks cleanup after an injected failure.
+
+**Techniques at this step.** [Bounded subprocesses and durable evidence ownership](#technique-bounded-process-evidence-lifecycle).
+
+**Source.** [`.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py:43`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L43) · [`.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py:372`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L372) · [`.github/workflows/allocation-pattern-checks.yml:19`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/.github/workflows/allocation-pattern-checks.yml#L19). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-repeat-measurement"></a>
+
+##### 15. Repeat scans and compare fingerprints
+
+**Component.** benchmark.py. The measurement driver warms up, repeats whole fresh-process kernel scans, checks that candidate tuples are unique and that their fingerprint stays constant, and records elapsed time and resource data. It has no kernel truth labels, so it makes no accuracy claim.
+
+**Techniques at this step.** [Warmup, repeat, and candidate-fingerprint measurement](#technique-repeatable-scan-measurement).
+
+**Source.** [`.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py:31`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py#L31) · [`.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py:64`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py#L64). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-cfg-build"></a>
+
+##### 16. Build normalized control-flow graph
+
+**Component.** Analyzer.build_cfg. CFGFast constructs the normalized graph and function lookup before symbolic execution or strategy exploration. Candidate extraction is a separate report computation after the bounded analyze run.
+
+**Techniques at this step.** [CFG and callgraph candidate search](#technique-cfg-candidate-search).
+
+**Source.** [`allocation_analyzer/cli.py:153`](https://github.com/STEVVVU/allocation-pattern-analyzer/blob/main/allocation_analyzer/cli.py#L153). [Back to execution flow](#execution-flow).
+
+<details>
+<summary>Scope and subsystem coverage</summary>
+
+Owned offline allocation-analyzer CLI workflows: configured trusted ELF analysis, seed-first/random/plain-symbolic fixture exploration, static kernel syscall-to-allocator candidate scan with optional bounded placeholder-input modeling, and separate harmless-fixture verification and repeatable measurement.
+
+- **Configuration and trusted ELF boundary.** Configured input validation and the separate kernel ELF/architecture boundary. [Step 2](#flow-step-config-elf), [Step 10](#flow-step-kernel-validate), [Step 1](#flow-step-cli-mode).
+- **Static syscall and allocation candidate scan.** Entry-to-allocator and syscall-to-allocator callgraph candidates. [Step 3](#flow-step-cfg-candidates), [Step 11](#flow-step-kernel-candidates), [Step 16](#flow-step-cfg-build).
+- **Bounded symbolic and concrete exploration.** Bounded paths, same-model argument extraction, trace capture and three exploration strategies. [Step 4](#flow-step-bounded-symbolic), [Step 5](#flow-step-coherent-witness), [Step 7](#flow-step-explore-seeds), [Step 8](#flow-step-explore-controls), [Step 12](#flow-step-kernel-optional-model), [Step 6](#flow-step-analysis-report), [Step 9](#flow-step-explore-report).
+- **Harmless fixture and native validation.** Only the owned C fixture is executed natively; the deterministic counter oracle is a verification path. [Step 13](#flow-step-fixture-oracle).
+- **Resource-bounded verification and retained evidence.** Owned subprocess lifecycle, cleanup, repeat scans, candidate fingerprints and retained artifacts. [Step 14](#flow-step-verify-lifecycle), [Step 15](#flow-step-repeat-measurement).
+
+Outside this flow audit:
+
+- `angr/`. Preserved upstream dependency code is not the owned analyzer path; directly used CFG and symbolic mechanisms remain attributed as mixed ownership.
+- `native/`. Upstream native engines are not directly invoked by the owned allocation CLI workflows.
+- `tests/`. Upstream angr tests do not drive the owned analyzer or fixture verification path.
+- `archive/upstream-github-workflows/`. Archived upstream workflows are inactive; the focused allocation workflow is in scope.
+
+</details>
+
+<!-- execution-flow:end -->
+
+<details>
+<summary>Subsystem technique index</summary>
+
 ### Subsystem map
 
 Select a subsystem in the diagram to open its techniques, tradeoffs, and code references. The numbered links provide the same navigation. This map groups components; the execution diagrams show their runtime flow.
@@ -32,6 +405,8 @@ flowchart LR
 5. [Resource-bounded verification and retained evidence](#subsystem-resource-bounded-verification-and-retained-evidence)
 
 The repository extends angr with bounded analyses of trusted ELF inputs and controlled C fixtures. The inherited angr framework supplies project loading, [CFG](#control-flow-graph) construction and [symbolic execution](#symbolic-execution). Project code validates user configuration, finds call paths to known allocators, explores declared interfaces and classifies unresolved cases. Kernel scans report [syntactic candidates](#syntactic-candidate); they do not prove runtime allocation or a vulnerability.
+
+</details>
 
 <details>
 <summary>Expand flow diagram 1</summary>
