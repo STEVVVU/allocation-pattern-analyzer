@@ -4,14 +4,37 @@ Bounded static analysis for allocation-reaching paths in trusted ELF x86-64 prog
 
 This repository retains the complete BSD-2-Clause angr source tree and Git history at released tag `v9.2.207` (`9037fb8c6ee4a2df61ba64b7a561373f5eb6b253`). The upstream license, copyright notices, and original README are preserved. The allocation analyzer, controlled fixtures, verification driver, and workflow are coursework additions; they do not replace or claim to reproduce the full angr project.
 
-## Guide
-
-[Implementation techniques](#implementation-techniques) ·
-[Architecture and execution guide](#architecture-and-execution-guide) · [Run](#run) · [Research adaptation and measured scope](#research-adaptation-and-measured-scope) · [Verification](#verification)
-
 ## Architecture and execution guide
 
+### Subsystem map
+
+Select a subsystem in the diagram to open its techniques, tradeoffs, and code references. The numbered links provide the same navigation. This map groups components; the execution diagrams show their runtime flow.
+
+```mermaid
+flowchart LR
+  system["Allocation Pattern<br/>Analyzer"]
+  system --> s1["1. Configuration and trusted ELF<br/>boundary"]
+  click s1 href "https://github.com/STEVVVU/allocation-pattern-analyzer#subsystem-configuration-and-trusted-elf-boundary" "Explore Configuration and trusted ELF boundary" _top
+  system --> s2["2. Static syscall and allocation<br/>candidate scan"]
+  click s2 href "https://github.com/STEVVVU/allocation-pattern-analyzer#subsystem-static-syscall-and-allocation-candidate-scan" "Explore Static syscall and allocation candidate scan" _top
+  system --> s3["3. Bounded symbolic and concrete<br/>exploration"]
+  click s3 href "https://github.com/STEVVVU/allocation-pattern-analyzer#subsystem-bounded-symbolic-and-concrete-exploration" "Explore Bounded symbolic and concrete exploration" _top
+  system --> s4["4. Harmless fixture and native<br/>validation"]
+  click s4 href "https://github.com/STEVVVU/allocation-pattern-analyzer#subsystem-harmless-fixture-and-native-validation" "Explore Harmless fixture and native validation" _top
+  system --> s5["5. Resource-bounded verification<br/>and retained evidence"]
+  click s5 href "https://github.com/STEVVVU/allocation-pattern-analyzer#subsystem-resource-bounded-verification-and-retained-evidence" "Explore Resource-bounded verification and retained evidence" _top
+```
+
+1. [Configuration and trusted ELF boundary](#subsystem-configuration-and-trusted-elf-boundary)
+2. [Static syscall and allocation candidate scan](#subsystem-static-syscall-and-allocation-candidate-scan)
+3. [Bounded symbolic and concrete exploration](#subsystem-bounded-symbolic-and-concrete-exploration)
+4. [Harmless fixture and native validation](#subsystem-harmless-fixture-and-native-validation)
+5. [Resource-bounded verification and retained evidence](#subsystem-resource-bounded-verification-and-retained-evidence)
+
 The repository extends angr with bounded analyses of trusted ELF inputs and controlled C fixtures. The inherited angr framework supplies project loading, [CFG](#control-flow-graph) construction and [symbolic execution](#symbolic-execution). Project code validates user configuration, finds call paths to known allocators, explores declared interfaces and classifies unresolved cases. Kernel scans report [syntactic candidates](#syntactic-candidate); they do not prove runtime allocation or a vulnerability.
+
+<details>
+<summary>Expand flow diagram 1</summary>
 
 ```mermaid
 flowchart LR
@@ -22,7 +45,12 @@ flowchart LR
   N6["Controlled fixture"] --> N7["Native verifier and counter oracle"]
 ```
 
+</details>
+
 Caption: offline analysis reports candidate paths and modeled witnesses, while the verifier separately runs only the project's owned harmless fixtures.
+
+<details>
+<summary>Expand flow diagram 2</summary>
 
 ```mermaid
 flowchart TD
@@ -51,6 +79,8 @@ flowchart TD
   N11["Unknown status"] --> N18["JSON result with limits"]
   N13["Witness status"] --> N18["JSON result with limits"]
 ```
+
+</details>
 
 Caption: validation rejects malformed or out-of-scope inputs. Static candidates then feed bounded symbolic exploration, whose unknown outcomes remain explicit; native counters validate only generated fixture behavior.
 
@@ -121,6 +151,279 @@ An unknown status means the analysis could not decide the case within its model 
 A native counter oracle compares actual allocation counters from a controlled fixture with expected counts. The verifier uses this for generated C programs; the oracle does not validate behavior in an arbitrary kernel image.
 </details>
 
+## Implementation techniques
+
+This section covers the owned offline analyzer, trusted ELF scan, generated harmless fixture, and maintained verification and metrics drivers. It excludes preserved upstream angr internals. The reasons for these implementation choices are inferred from the current code, not claims about the original authors' intent.
+
+<details>
+<summary>Full technique index</summary>
+
+| Subsystem | Technique cards | Source |
+| --- | --- | --- |
+| Configuration and trusted ELF boundary | [Strict configuration and ELF validation](#technique-config-trust-boundary) | [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py) |
+| Static syscall and allocation candidate scan | [CFG and callgraph candidate search](#technique-cfg-candidate-search) | [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py) |
+| Bounded symbolic and concrete exploration | [Bounded symbolic execution](#technique-bounded-symbolic-execution), [coherent witness extraction and tracing](#technique-coherent-witness-tracing), [seed-first selective concolic exploration](#technique-seed-first-selective-exploration), [exploration controls](#technique-exploration-control-strategies) | [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py) |
+| Harmless fixture and native validation | [Native counter instrumentation and independent oracle](#technique-native-counter-oracle) | [`fixtures/allocation_paths.c`](fixtures/allocation_paths.c), [verification driver](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py) |
+| Resource-bounded verification and retained evidence | [Bounded subprocesses and evidence ownership](#technique-bounded-process-evidence-lifecycle), [repeatable scan measurement](#technique-repeatable-scan-measurement) | [verification driver](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py), [metrics driver](.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py), [CI workflow](.github/workflows/allocation-pattern-checks.yml) |
+
+</details>
+
+<a id="subsystem-configuration-and-trusted-elf-boundary"></a>
+
+### 1. Configuration and trusted ELF boundary
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py).
+
+**Techniques.** [Strict configuration and trusted ELF validation](#technique-config-trust-boundary).
+
+<a id="technique-config-trust-boundary"></a>
+
+<details>
+<summary>Strict configuration and trusted ELF validation</summary>
+
+**Mechanism.** `load_config` requires an exact JSON key set, plain symbol names, unique integer inputs of supported widths, in-range seeds, declared allocator categories, and explicit step, state, time, seed, and trial limits. It resolves the binary relative to the config, checks file size and ELF magic, then `Analyzer` rejects non-AMD64 files and missing or imported symbols. The kernel path repeats its own file, size, format, architecture, and prefix checks.
+
+**Example.** A config with an extra `shell` key or a seed wider than its declared 32-bit input is rejected before angr loads the binary.
+
+**Why here.** These checks make the supported input contract explicit before analysis work begins.
+
+**Tradeoffs.** ELF magic and size are preliminary format checks, not a safety guarantee for arbitrary inputs. The analyzer therefore assumes trusted binaries and does not execute them natively.
+
+**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L60) `load_config` and [`Analyzer.__init__`](allocation_analyzer/cli.py#L129); [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py#L28) `scan_kernel`. Extension.
+
+
+
+**Used in.** [Configuration and trusted ELF boundary](#subsystem-configuration-and-trusted-elf-boundary). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="subsystem-static-syscall-and-allocation-candidate-scan"></a>
+
+### 2. Static syscall and allocation candidate scan
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py).
+
+**Techniques.** [CFG and callgraph candidate search](#technique-cfg-candidate-search).
+
+**Related concepts.** [syntactic candidate](#syntactic-candidate), [symbolic execution](#symbolic-execution).
+
+<a id="technique-cfg-candidate-search"></a>
+
+<details>
+<summary>CFG and callgraph candidate search</summary>
+
+**Mechanism.** The analyzer asks angr for a normalized `CFGFast` graph with data references, resolves declared entry and allocator symbols, and finds a shortest callgraph path for each allocator target. The kernel scanner gathers defined `__x64_sys_*` functions, intersects known allocator names with defined functions, sorts entries, and emits one candidate record per discovered entry. `max_entries` truncates the records only after CFG construction.
+
+The analyzer asks angr for a normalized fast CFG with data references, resolves declared entry, syscall and allocator symbols, and searches graph paths from the entry to allocator targets. These are candidates for later modeling.
+
+**Example.** A callgraph path from a declared syscall handler to `malloc` is reported as a static candidate. If `__x64_sys_fixture` reaches `kmalloc` through `slab_alloc`, the kernel scan reports that graph route as a syntactic candidate.
+
+**Why here.** Graph search narrows the symbolic execution to declared allocation-reaching routes. The graph index summarizes many entry-to-allocator routes before the more expensive, bounded symbolic stage.
+
+**Tradeoffs.** An incomplete or indirect callgraph can miss paths; a graph path alone does not prove feasible input values. A shortest graph route is only one syntactic path and may be infeasible even when a longer route is feasible; no path found remains unknown rather than unreachable.
+
+**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L153) constructs CFGFast in `Analyzer.build_cfg` and searches candidates in [`Analyzer.candidates`](allocation_analyzer/cli.py#L157); [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py#L28) `scan_kernel`. Mixed: analyzer extension over angr and NetworkX path search.
+
+
+
+**Used in.** [Static syscall and allocation candidate scan](#subsystem-static-syscall-and-allocation-candidate-scan). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="subsystem-bounded-symbolic-and-concrete-exploration"></a>
+
+### 3. Bounded symbolic and concrete exploration
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py).
+
+**Techniques.** [Bounded symbolic execution with explicit unknown outcomes](#technique-bounded-symbolic-execution), [Coherent witness extraction and executed-path tracing](#technique-coherent-witness-tracing), [Seed-first selective concolic exploration](#technique-seed-first-selective-exploration), [Deterministic random and plain-symbolic controls](#technique-exploration-control-strategies).
+
+**Related concepts.** [symbolic execution](#symbolic-execution), [witness](#witness).
+
+<a id="technique-bounded-symbolic-execution"></a>
+
+<details>
+<summary>Bounded symbolic execution</summary>
+
+**Mechanism.** The analyzer creates fixed-width symbolic bitvectors for declared inputs and starts an angr call state at the configured entry. A heap frontier explores successors until the step budget, created-state limit, or elapsed-time budget is reached. Allocator states are checked for satisfiability; execution errors, unconstrained successors, solver errors, and exhausted limits remain explicit unknowns. A witness can coexist with unknown paths.
+
+The analyzer creates symbolic bitvectors for declared inputs, starts an angr state at the configured entry, and explores states under step, state-count and time budgets. Reaching a modeled allocation produces a witness; exhausted or unsupported paths remain unknown.
+
+**Example.** A symbolic request length can satisfy a branch guarding an allocation call. In `entry_conditional`, a 32-bit symbolic value can satisfy the equality guarding `mapping_alloc`; a one-step loop run instead reports `step_limit`.
+
+**Why here.** The bounded run distinguishes feasible modeled paths from mere CFG candidates. It tests whether a graph candidate has a feasible path for the declared interface without turning open-ended exploration into an unbounded process.
+
+**Tradeoffs.** Bounds and unsupported behavior can leave results unknown. A witness establishes feasibility in angr's model, not on a native execution. `no_witness_observed` means only that this bounded run found none; it is not a proof of absence.
+
+**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L175) `Analyzer._symbolic_run`; the optional kernel entry adapter is [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py#L115) `_analyze_entry`. Mixed: project policy and result labels over angr and Claripy.
+
+
+
+**Used in.** [Bounded symbolic and concrete exploration](#subsystem-bounded-symbolic-and-concrete-exploration). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="technique-coherent-witness-tracing"></a>
+
+<details>
+<summary>Coherent witness extraction and executed-path tracing</summary>
+
+**Mechanism.** At a satisfiable allocator state, the analyzer concatenates all symbolic arguments and asks the solver for one model, then splits that packed integer back into the declared widths. This keeps correlated arguments from different satisfying models from being combined. It separately derives the function chain from the state's visited basic blocks and records the block trace, constraints, and whether both entry and allocator were recovered.
+
+**Example.** For the correlated fixture, `left=7, right=17` is not accepted by the native oracle; one joint model must satisfy either allowed pair in the C condition.
+
+**Why here.** The reported inputs and route need to describe the same solver state that reached the allocator.
+
+**Tradeoffs.** The concatenated model chooses one satisfying assignment, not all assignments. Trace recovery can be incomplete when a block or function cannot be mapped through the CFG.
+
+**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L230) extracts one packed Claripy model and [`Analyzer._call_trace`](allocation_analyzer/cli.py#L302) reconstructs the route. Mixed: project report assembly over angr history and Claripy models.
+
+
+
+**Used in.** [Bounded symbolic and concrete exploration](#subsystem-bounded-symbolic-and-concrete-exploration). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="technique-seed-first-selective-exploration"></a>
+
+<details>
+<summary>Seed-first selective concolic exploration</summary>
+
+**Mechanism.** The `explore` mode first runs each configured seed with concrete bitvectors and records visited blocks and edges. It computes graph nodes that can reach known allocator targets, then gives symbolic successors higher queue priority when they use an uncovered edge and remain in that target-reachable set. The concrete and symbolic stages consume the configured step and time budgets for this strategy.
+
+**Example.** Seeds that follow the false branch of `entry_conditional` leave its allocation edge uncovered; symbolic exploration prioritizes that route if the CFG says it can reach the allocator.
+
+**Why here.** Concrete paths provide observed edge coverage that can guide symbolic work toward allocation-reaching branches.
+
+**Tradeoffs.** Priority is a heuristic over CFG reachability and does not establish feasibility. The method uses the supplied seeds, not mutation-based fuzzing, and can spend its bounded budget on other paths.
+
+**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L332) `Analyzer._concrete_run` and [`Analyzer.explore`](allocation_analyzer/cli.py#L410). Mixed: project selection policy over angr execution and NetworkX graph analysis.
+
+
+
+**Used in.** [Bounded symbolic and concrete exploration](#subsystem-bounded-symbolic-and-concrete-exploration). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="technique-exploration-control-strategies"></a>
+
+<details>
+<summary>Deterministic random and plain-symbolic controls</summary>
+
+**Mechanism.** In the same `explore` invocation, seeded random concrete inputs use a local `random.Random` initialized from the config seed, while plain bounded symbolic exploration starts without seed-derived edge priorities. Both are reported beside seed-first exploration with separate steps, witnesses, and unknown outcomes. The CLI shares one CFG across the strategies and records their fixed execution order.
+
+**Example.** The verifier checks that the seeded-random conditional run spends its block budget without a witness while seed-first and plain symbolic runs find the modeled allocation branch.
+
+**Why here.** These controls expose what the implementation observed under configured inputs and budgets.
+
+**Tradeoffs.** Strategies are run sequentially and share setup; timings cannot show causal superiority. The controls demonstrate fixture behavior, not generalized search quality.
+
+**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L410) `Analyzer.explore`; [`verify.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L207) `Run.drive` checks the fixture controls. Extension.
+
+
+
+**Used in.** [Bounded symbolic and concrete exploration](#subsystem-bounded-symbolic-and-concrete-exploration). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="subsystem-harmless-fixture-and-native-validation"></a>
+
+### 4. Harmless fixture and native validation
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`fixtures/allocation_paths.c`](fixtures/allocation_paths.c), [`.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py).
+
+**Techniques.** [Native counter instrumentation and independent oracle](#technique-native-counter-oracle).
+
+**Related concepts.** [witness](#witness), [native counter oracle](#native-counter).
+
+<a id="technique-native-counter-oracle"></a>
+
+<details>
+<summary>Native counter oracle</summary>
+
+**Mechanism.** The owned C fixture increments `volatile` slab and mapping counters at allocator stubs. On supported Linux runs, the driver executes the native fixture for each reported input and compares the exact counter object with a separately written Python oracle. It also requires a positive counter for reported witnesses and checks zero counters for the deliberately infeasible input. The unsupported indirect-call case is not run natively.
+
+The verification driver compiles and runs only the owned C fixtures with instrumented allocation counters, then compares observed paths and counts with analyzer output. Native results are reported separately from symbolic witnesses.
+
+**Example.** The conditional fixture is run with inputs that do and do not reach its allocation branch. A conditional witness is passed to the fixture runner; the observed `mapping` counter must equal the independent oracle's expected count.
+
+**Why here.** A native oracle checks the model against a real execution of controlled code without executing arbitrary analyzed ELF files.
+
+**Tradeoffs.** Fixture agreement does not validate arbitrary ELF targets or kernel images. Windows records native validation as not run because it cannot execute this Linux ELF.
+
+**Code and ownership.** [`fixtures/allocation_paths.c`](fixtures/allocation_paths.c#L10) `slab_count`, `mapping_count`, and allocator stubs; [`verify.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L166) `Run.native_oracle_check` and `Run.concrete_oracle`. Extension.
+
+
+
+**Used in.** [Harmless fixture and native validation](#subsystem-harmless-fixture-and-native-validation). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="subsystem-resource-bounded-verification-and-retained-evidence"></a>
+
+### 5. Resource-bounded verification and retained evidence
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py), [`.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py), [`.github/workflows/allocation-pattern-checks.yml`](.github/workflows/allocation-pattern-checks.yml).
+
+**Techniques.** [Bounded subprocesses and durable evidence ownership](#technique-bounded-process-evidence-lifecycle), [Warmup, repeat, and candidate-fingerprint measurement](#technique-repeatable-scan-measurement).
+
+<a id="technique-bounded-process-evidence-lifecycle"></a>
+
+<details>
+<summary>Bounded subprocesses and evidence ownership</summary>
+
+**Mechanism.** The verification driver gives each run a unique scratch directory, records commands and output in a transcript, and writes stage events to JSON. It runs child commands with explicit timeouts; the kernel verifier additionally applies an address-space limit on POSIX. Cleanup deletes only the run-owned scratch ELF files and checks that transcript and evidence survive, including the injected-failure path. The CI job preserves run records as an artifact.
+
+**Example.** Kernel scan runs under a 900-second timeout and an 8-GiB address-space limit in the hosted verifier; timeout evidence is written before the failure is raised.
+
+**Why here.** Bounded analysis can consume substantial resources, and retained run-local records make success, failure, and cleanup inspectable.
+
+**Tradeoffs.** The standalone analyzer has no process-level timeout or memory cap. Address-space limiting is POSIX-only; Windows reports no native fixture execution.
+
+**Code and ownership.** [`verify.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L43) `Run.command` and [`Run.cleanup`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L372); [workflow](.github/workflows/allocation-pattern-checks.yml#L19) sets the job limit and uploads evidence. Extension.
+
+
+
+**Used in.** [Resource-bounded verification and retained evidence](#subsystem-resource-bounded-verification-and-retained-evidence). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+<a id="technique-repeatable-scan-measurement"></a>
+
+<details>
+<summary>Warmup, repeat, and candidate-fingerprint measurement</summary>
+
+**Mechanism.** The metrics driver records environment and input hashes, runs one unreported warmup, then launches five fresh scan processes. Each repeat requires all discovered syscall entries to be scanned, rejects duplicate candidate tuples, and checks a stable hash of the complete candidate set. The profile run is retained separately from timed samples; native fixture labels and unknown kernel outcomes are also preserved.
+
+**Example.** Each kernel sample contains elapsed time, peak RSS, CPU time, entry and candidate counts, unknown-entry count, and a candidate-set hash.
+
+**Why here.** Repeats and output fingerprints help distinguish reproducible scan output from a single run while keeping fixture ground truth separate from kernel candidates.
+
+**Tradeoffs.** A stable candidate set is not evidence that candidates are feasible. Strategy order is fixed and CFG setup is shared, so timings do not establish causal performance differences.
+
+**Code and ownership.** [metrics driver](.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py#L31) `measure` and [`main`](.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py#L64). Extension.
+
+
+
+**Used in.** [Resource-bounded verification and retained evidence](#subsystem-resource-bounded-verification-and-retained-evidence). [Back to the subsystem map](#architecture-and-execution-guide).
+
+</details>
+
+## Guide
+
+[Implementation techniques](#implementation-techniques) ·
+[Architecture and execution guide](#architecture-and-execution-guide) · [Run](#run) · [Research adaptation and measured scope](#research-adaptation-and-measured-scope) · [Verification](#verification)
+
 ## Run
 
 Use Python 3.11 and install the exact angr release with the dependencies in [`requirements-ci.txt`](requirements-ci.txt). On a clean Linux environment, install Rust toolchain `1.99.1`, then run:
@@ -170,174 +473,3 @@ The maintained [`verify-allocation-pattern-analyzer` skill](.agents/skills/verif
 The inherited upstream CI workflow files are preserved byte-for-byte in [`archive/upstream-github-workflows/`](archive/upstream-github-workflows/); this project uses its focused workflow rather than the upstream workflows that call external services and reusable workflows.
 
 The [native Ubuntu verification](https://github.com/STEVVVU/allocation-pattern-analyzer/actions/runs/39721132277) passed all ten analyzer cases, exact native counters for seven positive entrypoints, the infeasible zero-counter control, and the post-evidence failure/cleanup control. [Retained summaries](docs/evidence/linux-39721132277/) include raw artifact hashes and representative concrete witnesses. This earlier run verifies the controlled ELF fixture. The separate real-kernel scan above adds static candidate coverage without proving speculative-execution behavior.
-
-## Implementation techniques
-
-This section covers the owned offline analyzer, trusted ELF scan, generated harmless fixture, and maintained verification and metrics drivers. It excludes preserved upstream angr internals. The reasons for these implementation choices are inferred from the current code, not claims about the original authors' intent.
-
-| Subsystem | Technique cards | Source |
-| --- | --- | --- |
-| Configuration and trusted ELF boundary | [Strict configuration and ELF validation](#technique-config-trust-boundary) | [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py) |
-| Static syscall and allocation candidate scan | [CFG and callgraph candidate search](#technique-cfg-candidate-search) | [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py) |
-| Bounded symbolic and concrete exploration | [Bounded symbolic execution](#technique-bounded-symbolic-execution), [coherent witness extraction and tracing](#technique-coherent-witness-tracing), [seed-first selective concolic exploration](#technique-seed-first-selective-exploration), [exploration controls](#technique-exploration-control-strategies) | [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py), [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py) |
-| Harmless fixture and native validation | [Native counter instrumentation and independent oracle](#technique-native-counter-oracle) | [`fixtures/allocation_paths.c`](fixtures/allocation_paths.c), [verification driver](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py) |
-| Resource-bounded verification and retained evidence | [Bounded subprocesses and evidence ownership](#technique-bounded-process-evidence-lifecycle), [repeatable scan measurement](#technique-repeatable-scan-measurement) | [verification driver](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py), [metrics driver](.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py), [CI workflow](.github/workflows/allocation-pattern-checks.yml) |
-
-<a id="technique-config-trust-boundary"></a>
-
-<details>
-<summary>Strict configuration and trusted ELF validation</summary>
-
-**Mechanism.** `load_config` requires an exact JSON key set, plain symbol names, unique integer inputs of supported widths, in-range seeds, declared allocator categories, and explicit step, state, time, seed, and trial limits. It resolves the binary relative to the config, checks file size and ELF magic, then `Analyzer` rejects non-AMD64 files and missing or imported symbols. The kernel path repeats its own file, size, format, architecture, and prefix checks.
-
-**Example.** A config with an extra `shell` key or a seed wider than its declared 32-bit input is rejected before angr loads the binary.
-
-**Why here.** These checks make the supported input contract explicit before analysis work begins.
-
-**Tradeoffs.** ELF magic and size are preliminary format checks, not a safety guarantee for arbitrary inputs. The analyzer therefore assumes trusted binaries and does not execute them natively.
-
-**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L60) `load_config` and [`Analyzer.__init__`](allocation_analyzer/cli.py#L129); [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py#L28) `scan_kernel`. Extension.
-
-</details>
-
-<a id="technique-cfg-candidate-search"></a>
-
-<details>
-<summary>CFG and callgraph candidate search</summary>
-
-**Mechanism.** The analyzer asks angr for a normalized `CFGFast` graph with data references, resolves declared entry and allocator symbols, and finds a shortest callgraph path for each allocator target. The kernel scanner gathers defined `__x64_sys_*` functions, intersects known allocator names with defined functions, sorts entries, and emits one candidate record per discovered entry. `max_entries` truncates the records only after CFG construction.
-
-The analyzer asks angr for a normalized fast CFG with data references, resolves declared entry, syscall and allocator symbols, and searches graph paths from the entry to allocator targets. These are candidates for later modeling.
-
-**Example.** A callgraph path from a declared syscall handler to `malloc` is reported as a static candidate. If `__x64_sys_fixture` reaches `kmalloc` through `slab_alloc`, the kernel scan reports that graph route as a syntactic candidate.
-
-**Why here.** Graph search narrows the symbolic execution to declared allocation-reaching routes. The graph index summarizes many entry-to-allocator routes before the more expensive, bounded symbolic stage.
-
-**Tradeoffs.** An incomplete or indirect callgraph can miss paths; a graph path alone does not prove feasible input values. A shortest graph route is only one syntactic path and may be infeasible even when a longer route is feasible; no path found remains unknown rather than unreachable.
-
-**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L153) constructs CFGFast in `Analyzer.build_cfg` and searches candidates in [`Analyzer.candidates`](allocation_analyzer/cli.py#L157); [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py#L28) `scan_kernel`. Mixed: analyzer extension over angr and NetworkX path search.
-
-</details>
-
-<a id="technique-bounded-symbolic-execution"></a>
-
-<details>
-<summary>Bounded symbolic execution</summary>
-
-**Mechanism.** The analyzer creates fixed-width symbolic bitvectors for declared inputs and starts an angr call state at the configured entry. A heap frontier explores successors until the step budget, created-state limit, or elapsed-time budget is reached. Allocator states are checked for satisfiability; execution errors, unconstrained successors, solver errors, and exhausted limits remain explicit unknowns. A witness can coexist with unknown paths.
-
-The analyzer creates symbolic bitvectors for declared inputs, starts an angr state at the configured entry, and explores states under step, state-count and time budgets. Reaching a modeled allocation produces a witness; exhausted or unsupported paths remain unknown.
-
-**Example.** A symbolic request length can satisfy a branch guarding an allocation call. In `entry_conditional`, a 32-bit symbolic value can satisfy the equality guarding `mapping_alloc`; a one-step loop run instead reports `step_limit`.
-
-**Why here.** The bounded run distinguishes feasible modeled paths from mere CFG candidates. It tests whether a graph candidate has a feasible path for the declared interface without turning open-ended exploration into an unbounded process.
-
-**Tradeoffs.** Bounds and unsupported behavior can leave results unknown. A witness establishes feasibility in angr's model, not on a native execution. `no_witness_observed` means only that this bounded run found none; it is not a proof of absence.
-
-**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L175) `Analyzer._symbolic_run`; the optional kernel entry adapter is [`allocation_analyzer/kernel_scan.py`](allocation_analyzer/kernel_scan.py#L115) `_analyze_entry`. Mixed: project policy and result labels over angr and Claripy.
-
-</details>
-
-<a id="technique-coherent-witness-tracing"></a>
-
-<details>
-<summary>Coherent witness extraction and executed-path tracing</summary>
-
-**Mechanism.** At a satisfiable allocator state, the analyzer concatenates all symbolic arguments and asks the solver for one model, then splits that packed integer back into the declared widths. This keeps correlated arguments from different satisfying models from being combined. It separately derives the function chain from the state's visited basic blocks and records the block trace, constraints, and whether both entry and allocator were recovered.
-
-**Example.** For the correlated fixture, `left=7, right=17` is not accepted by the native oracle; one joint model must satisfy either allowed pair in the C condition.
-
-**Why here.** The reported inputs and route need to describe the same solver state that reached the allocator.
-
-**Tradeoffs.** The concatenated model chooses one satisfying assignment, not all assignments. Trace recovery can be incomplete when a block or function cannot be mapped through the CFG.
-
-**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L230) extracts one packed Claripy model and [`Analyzer._call_trace`](allocation_analyzer/cli.py#L302) reconstructs the route. Mixed: project report assembly over angr history and Claripy models.
-
-</details>
-
-<a id="technique-seed-first-selective-exploration"></a>
-
-<details>
-<summary>Seed-first selective concolic exploration</summary>
-
-**Mechanism.** The `explore` mode first runs each configured seed with concrete bitvectors and records visited blocks and edges. It computes graph nodes that can reach known allocator targets, then gives symbolic successors higher queue priority when they use an uncovered edge and remain in that target-reachable set. The concrete and symbolic stages consume the configured step and time budgets for this strategy.
-
-**Example.** Seeds that follow the false branch of `entry_conditional` leave its allocation edge uncovered; symbolic exploration prioritizes that route if the CFG says it can reach the allocator.
-
-**Why here.** Concrete paths provide observed edge coverage that can guide symbolic work toward allocation-reaching branches.
-
-**Tradeoffs.** Priority is a heuristic over CFG reachability and does not establish feasibility. The method uses the supplied seeds, not mutation-based fuzzing, and can spend its bounded budget on other paths.
-
-**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L332) `Analyzer._concrete_run` and [`Analyzer.explore`](allocation_analyzer/cli.py#L410). Mixed: project selection policy over angr execution and NetworkX graph analysis.
-
-</details>
-
-<a id="technique-exploration-control-strategies"></a>
-
-<details>
-<summary>Deterministic random and plain-symbolic controls</summary>
-
-**Mechanism.** In the same `explore` invocation, seeded random concrete inputs use a local `random.Random` initialized from the config seed, while plain bounded symbolic exploration starts without seed-derived edge priorities. Both are reported beside seed-first exploration with separate steps, witnesses, and unknown outcomes. The CLI shares one CFG across the strategies and records their fixed execution order.
-
-**Example.** The verifier checks that the seeded-random conditional run spends its block budget without a witness while seed-first and plain symbolic runs find the modeled allocation branch.
-
-**Why here.** These controls expose what the implementation observed under configured inputs and budgets.
-
-**Tradeoffs.** Strategies are run sequentially and share setup; timings cannot show causal superiority. The controls demonstrate fixture behavior, not generalized search quality.
-
-**Code and ownership.** [`allocation_analyzer/cli.py`](allocation_analyzer/cli.py#L410) `Analyzer.explore`; [`verify.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L207) `Run.drive` checks the fixture controls. Extension.
-
-</details>
-
-<a id="technique-native-counter-oracle"></a>
-
-<details>
-<summary>Native counter oracle</summary>
-
-**Mechanism.** The owned C fixture increments `volatile` slab and mapping counters at allocator stubs. On supported Linux runs, the driver executes the native fixture for each reported input and compares the exact counter object with a separately written Python oracle. It also requires a positive counter for reported witnesses and checks zero counters for the deliberately infeasible input. The unsupported indirect-call case is not run natively.
-
-The verification driver compiles and runs only the owned C fixtures with instrumented allocation counters, then compares observed paths and counts with analyzer output. Native results are reported separately from symbolic witnesses.
-
-**Example.** The conditional fixture is run with inputs that do and do not reach its allocation branch. A conditional witness is passed to the fixture runner; the observed `mapping` counter must equal the independent oracle's expected count.
-
-**Why here.** A native oracle checks the model against a real execution of controlled code without executing arbitrary analyzed ELF files.
-
-**Tradeoffs.** Fixture agreement does not validate arbitrary ELF targets or kernel images. Windows records native validation as not run because it cannot execute this Linux ELF.
-
-**Code and ownership.** [`fixtures/allocation_paths.c`](fixtures/allocation_paths.c#L10) `slab_count`, `mapping_count`, and allocator stubs; [`verify.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L166) `Run.native_oracle_check` and `Run.concrete_oracle`. Extension.
-
-</details>
-
-<a id="technique-bounded-process-evidence-lifecycle"></a>
-
-<details>
-<summary>Bounded subprocesses and evidence ownership</summary>
-
-**Mechanism.** The verification driver gives each run a unique scratch directory, records commands and output in a transcript, and writes stage events to JSON. It runs child commands with explicit timeouts; the kernel verifier additionally applies an address-space limit on POSIX. Cleanup deletes only the run-owned scratch ELF files and checks that transcript and evidence survive, including the injected-failure path. The CI job preserves run records as an artifact.
-
-**Example.** Kernel scan runs under a 900-second timeout and an 8-GiB address-space limit in the hosted verifier; timeout evidence is written before the failure is raised.
-
-**Why here.** Bounded analysis can consume substantial resources, and retained run-local records make success, failure, and cleanup inspectable.
-
-**Tradeoffs.** The standalone analyzer has no process-level timeout or memory cap. Address-space limiting is POSIX-only; Windows reports no native fixture execution.
-
-**Code and ownership.** [`verify.py`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L43) `Run.command` and [`Run.cleanup`](.agents/skills/verify-allocation-pattern-analyzer/scripts/verify.py#L372); [workflow](.github/workflows/allocation-pattern-checks.yml#L19) sets the job limit and uploads evidence. Extension.
-
-</details>
-
-<a id="technique-repeatable-scan-measurement"></a>
-
-<details>
-<summary>Warmup, repeat, and candidate-fingerprint measurement</summary>
-
-**Mechanism.** The metrics driver records environment and input hashes, runs one unreported warmup, then launches five fresh scan processes. Each repeat requires all discovered syscall entries to be scanned, rejects duplicate candidate tuples, and checks a stable hash of the complete candidate set. The profile run is retained separately from timed samples; native fixture labels and unknown kernel outcomes are also preserved.
-
-**Example.** Each kernel sample contains elapsed time, peak RSS, CPU time, entry and candidate counts, unknown-entry count, and a candidate-set hash.
-
-**Why here.** Repeats and output fingerprints help distinguish reproducible scan output from a single run while keeping fixture ground truth separate from kernel candidates.
-
-**Tradeoffs.** A stable candidate set is not evidence that candidates are feasible. Strategy order is fixed and CFG setup is shared, so timings do not establish causal performance differences.
-
-**Code and ownership.** [metrics driver](.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py#L31) `measure` and [`main`](.agents/skills/verify-allocation-pattern-analyzer/scripts/benchmark.py#L64). Extension.
-
-</details>
